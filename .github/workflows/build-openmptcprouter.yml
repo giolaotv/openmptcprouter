@@ -1,81 +1,77 @@
-name: Build & Release OpenMPTCPRouter x86_64 Kernel 6.12
+name: 🧱 Build OpenMPTCPRouter x86_64 Kernel 6.12 (build.sh)
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, build, develop ]
+    branches:
+      - main
+      - develop
+      - build
+
+env:
+  TARGET: x86_64
+  KERNEL_VERSION: 6.12
+  BUILD_DIR: openmptcprouter/x86_64/6.12/source
+  REPO_URL: https://github.com/Ysurac/openmptcprouter.git
+  REPO_BRANCH: develop
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    env:
-      REPO_URL: https://github.com/Ysurac/openmptcprouter.git
-      REPO_BRANCH: develop
-      TARGET: x86_64
-      BUILD_DIR: openmptcprouter/x86_64/6.12/source
-      TZ: Asia/Ho_Chi_Minh
 
     steps:
-      - name: 🧹 Checkout repository
+      - name: 📦 Checkout this repository
         uses: actions/checkout@v4
 
-      - name: 🛠️ Cài đặt các gói cần thiết
+      - name: 🧰 Cài đặt môi trường build
         run: |
           sudo apt update
-          sudo apt install -y build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-            python3-distutils rsync unzip zlib1g-dev file wget curl time
+          sudo apt install -y build-essential clang flex g++ gawk gcc-multilib gettext \
+            git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+            file wget curl ccache python3-pip python3-setuptools jq subversion
 
-      - name: 📥 Clone mã nguồn OpenMPTCPRouter (develop branch)
+      - name: 📥 Clone OpenMPTCPRouter source
         run: |
           mkdir -p ${{ env.BUILD_DIR }}
           cd $(dirname ${{ env.BUILD_DIR }})
           git clone --depth=1 -b ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} source
-          cd source/openmptcprouter
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
 
-      - name: ⚙️ Cấu hình build cho x86_64 (giữ nguyên omr-dscp)
+      - name: 🧩 Kiểm tra & cấp quyền thực thi build.sh
         run: |
-          cd ${{ env.BUILD_DIR }}/openmptcprouter
-          if [ -f configs/${{ env.TARGET }}.config ]; then
-            cp configs/${{ env.TARGET }}.config .config
-          else
-            make defconfig
-          fi
-          echo "CONFIG_TARGET_x86=y" >> .config
-          echo "CONFIG_TARGET_x86_64=y" >> .config
-          make defconfig
+          cd ${{ env.BUILD_DIR }}
+          chmod +x build.sh
 
-      - name: 🧱 Build firmware OpenMPTCPRouter
+      - name: ⚙️ Khởi tạo target build (init)
         run: |
-          cd ${{ env.BUILD_DIR }}/openmptcprouter
-          echo "⏳ Bắt đầu biên dịch firmware..."
-          make -j$(nproc) V=s || make -j1 V=s
-          echo "✅ Build hoàn tất"
+          cd ${{ env.BUILD_DIR }}
+          ./build.sh init -t ${{ env.TARGET }}
+
+      - name: 🏗️ Build firmware qua build.sh
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          ./build.sh build -t ${{ env.TARGET }} -k ${{ env.KERNEL_VERSION }}
 
       - name: 📦 Thu thập firmware output
         run: |
           mkdir -p $GITHUB_WORKSPACE/output
-          find ${{ env.BUILD_DIR }}/openmptcprouter/bin/targets/x86/64/ -type f \( \
-            -name "*.img.gz" -o -name "*.ext4*" -o -name "*.squashfs*" -o -name "*.manifest" \
-          \) -exec cp {} $GITHUB_WORKSPACE/output/ \;
-          ls -lh $GITHUB_WORKSPACE/output
+          find ${{ env.BUILD_DIR }}/bin/targets/ -type f \( -name "*.img.gz" -o -name "*.squashfs" -o -name "*.ext4" -o -name "*.bin" -o -name "*.tar" \) -exec cp {} $GITHUB_WORKSPACE/output/ \;
 
-      - name: 📤 Upload firmware artifact
+      - name: ☁️ Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openmptcprouter-x86_64-kernel6.12
-          path: output/*
+          name: OpenMPTCPRouter-${{ env.TARGET }}-Kernel${{ env.KERNEL_VERSION }}
+          path: output/
 
-      - name: 🚀 Tự động tạo bản phát hành (Release)
+      - name: 🚀 Auto Release firmware
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push'
+        if: success()
         with:
-          tag_name: omr-x86_64-kernel6.12-${{ github.run_number }}
-          name: OpenMPTCPRouter x86_64 Kernel 6.12 Build #${{ github.run_number }}
+          tag_name: build-${{ env.TARGET }}-${{ env.KERNEL_VERSION }}-${{ github.run_number }}
+          name: "OpenMPTCPRouter Build #${{ github.run_number }} - x86_64 Kernel 6.12"
           body: |
-            🔥 **OpenMPTCPRouter x86_64 Kernel 6.12 Build Completed**
-            - Bao gồm đầy đủ module: omr-dscp, luci-app-omr-dscp, xtables-addons, v.v.
-            - Build từ branch: `${{ env.REPO_BRANCH }}`
+            ✅ Build hoàn tất thông qua build.sh  
+            - Target: **${{ env.TARGET }}**  
+            - Kernel: **${{ env.KERNEL_VERSION }}**  
+            - Bao gồm omr-dscp, luci, firewall4, shadowsocks-rust, v.v.  
+            🧱 Tự động build bằng GitHub Actions
           files: output/*
