@@ -1,4 +1,4 @@
-name: openmptcprouter-x86_64-6.1-24.10.4
+name: openmptcprouter-x86_64-6.1
 on: [push]
 
 env:
@@ -8,9 +8,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     continue-on-error: true
-
     steps:
-    - name: Branch name
+    - name: Set branch info
       id: branch_name
       run: |
         echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
@@ -18,22 +17,24 @@ jobs:
         echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_OUTPUT
 
-    - name: Prepare environment
+    - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git \
           libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
-          subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp \
-          libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf \
-          automake libtool autopoint device-tree-compiler python3-pyelftools llvm clang
+          subversion flex uglifyjs gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
+          libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint \
+          device-tree-compiler python3-pyelftools llvm clang rsync openssh-client
 
     - name: Free disk space
       run: |
         df -h
-        sudo swapoff -a >/dev/null 2>&1 || true
-        sudo rm -f /swapfile >/dev/null 2>&1 || true
-        sudo apt-get autoremove -y >/dev/null 2>&1 || true
-        sudo apt-get autoclean -y >/dev/null 2>&1 || true
+        sudo swapoff -a || true
+        sudo rm -f /swapfile || true
+        sudo apt-get autoremove -y || true
+        sudo apt-get autoclean -y || true
+        sudo rm -rf /usr/local/share/boost $AGENT_TOOLSDIRECTORY /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+        sudo docker rmi $(docker images -qf "dangling=true") || true
         df -h
 
     - name: Clone OpenMPTCPRouter
@@ -42,6 +43,12 @@ jobs:
         cd omr
         git checkout develop
         git pull
+      working-directory: ${{ github.workspace }}
+
+    - name: Prepare toolchain
+      working-directory: omr
+      run: |
+        OMR_KERNEL="6.1" OMR_FEED_SRC="develop" sh build.sh prepare {tools,toolchain}/install -j$(nproc)
 
     - name: Remove problematic dnsmasq patch
       working-directory: omr/x86_64/6.1/source
@@ -56,51 +63,35 @@ jobs:
           echo "Patch directory not found, skipping..."
         fi
 
-    - name: Build toolchain
-      working-directory: omr
-      env:
-        OMR_FEED_URL: https://github.com/ysurac/openmptcprouter-feeds
-      run: |
-        OMR_KERNEL="6.1" OMR_FEED_SRC="develop" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || \
-        OMR_KERNEL="6.1" OMR_FEED_SRC="develop" sh build.sh prepare {tools,toolchain}/install -j1 V=s
-
     - name: Build packages
-      working-directory: omr
+      working-directory: omr/x86_64/6.1/source
       run: |
-        make IGNORE_ERRORS=m -C x86_64/6.1/source package/{compile,install,index} -j$(nproc) || \
-        make IGNORE_ERRORS=m -C x86_64/6.1/source package/{compile,install,index} -j1 V=s
+        make IGNORE_ERRORS=m package/{compile,install,index} -j$(nproc) || make IGNORE_ERRORS=m package/{compile,install,index} -j1 V=s
 
     - name: Build image
-      working-directory: omr
+      working-directory: omr/x86_64/6.1/source
       run: |
-        make IGNORE_ERRORS=m -C x86_64/6.1/source target/install -j$(nproc) || \
-        make IGNORE_ERRORS=m -C x86_64/6.1/source target/install -j1 V=s
+        make IGNORE_ERRORS=m target/install -j$(nproc) || make IGNORE_ERRORS=m target/install -j1 V=s
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: x86_64
-        path: omr/x86_64/6.1/source/bin
-        overwrite: true
-
+    - name: Move binaries for rsync
+      run: |
+        mv omr/x86_64/6.1/source/bin ${{ github.workspace }}/
+    
     - name: Deploy - Create directory via SSH
+      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
       uses: ysurac/ssh-action@master
       env:
         SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
-        SOURCE_TAG: ${{ steps.branch_name.outputs.SOURCE_TAG }}
       with:
-        command: mkdir -p deploy/${{env.SOURCE_BRANCH}}/6.1/x86_64
         host: ${{ secrets.OMR_DEPLOY_HOST }}
         user: deploy
         port: ${{ secrets.OMR_DEPLOY_PORT }}
         key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-
-    - name: Move binaries for rsync
-      run: |
-        mv omr/x86_64/6.1/source/bin ./bin
+        command: |
+          mkdir -p deploy/${{ env.SOURCE_BRANCH }}/6.1/x86_64
 
     - name: Deploy - Upload via rsync
+      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
       uses: ysurac/action-rsync@master
       env:
         ARGS: -av --delete-after
