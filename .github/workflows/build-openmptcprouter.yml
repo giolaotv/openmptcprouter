@@ -1,116 +1,111 @@
-name: openmptcprouter-x86_64
+name: OpenMPTCPRouter x86_64 Kernel 6.1
 
 on:
   push:
     branches:
       - develop
-    tags:
-      - 'v24.10.*'
+      - main
+  workflow_dispatch:
 
 env:
   REPO_URL: 'https://github.com/ysurac/openmptcprouter'
+  OMR_TARGET: x86_64
+  OMR_KERNEL: 6.1
+  OPENWRT_VERSION: v24.10.4
 
 jobs:
-  build-x86_64:
+  build:
     runs-on: ubuntu-latest
     continue-on-error: false
 
     steps:
-    - name: Checkout repository
+    - name: Checkout workflow repository
       uses: actions/checkout@v3
 
-    - name: Set branch/tag info
-      id: branch_name
-      run: |
-        echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
-        echo "SOURCE_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-        echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_OUTPUT
-
-    - name: Install build dependencies
+    - name: Prepare environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git \
-        libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion \
-        flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
-        libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint \
-        device-tree-compiler python3-pyelftools llvm clang
+        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev \
+          lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
+          libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler python3-pyelftools llvm clang
 
     - name: Free disk space
       run: |
+        df -h
         sudo swapoff -a || true
         sudo rm -f /swapfile || true
         sudo apt-get autoremove -y || true
         sudo apt-get autoclean -y || true
+        sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
         df -h
 
-    - name: Clone OpenMPTCProuter
+    - name: Clone OpenMPTCPRouter source
       run: |
         git clone $REPO_URL omr
         cd omr
         git checkout develop
         git pull
+        pwd
 
-    - name: Build toolchain
-      working-directory: omr
-      run: |
-        OMR_TARGET=x86_64
-        OMR_KERNEL=6.1
-        OMR_FEED_SRC=${{ steps.branch_name.outputs.SOURCE_NAME }}
-        sh build.sh prepare {tools,toolchain}/install -j$(nproc)
-
-    - name: Remove problematic dnsmasq patch
+    - name: Remove incompatible dnsmasq patches
       working-directory: omr/x86_64/6.1/source
       run: |
         PATCH_DIR="package/network/services/dnsmasq/patches"
         if [ -d "$PATCH_DIR" ]; then
-          echo "Removing patch 999-remove-nftset-logs.patch to avoid build failure..."
+          echo "Removing incompatible dnsmasq patches..."
           rm -f $PATCH_DIR/999-remove-nftset-logs.patch
+          rm -f $PATCH_DIR/200-ubus_dns.patch
         else
           echo "Patch directory not found, skipping..."
         fi
 
-    - name: Build packages
-      working-directory: omr
+    - name: Update feeds
+      working-directory: omr/x86_64/6.1/source
       run: |
-        OMR_TARGET=x86_64
-        OMR_KERNEL=6.1
-        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j$(nproc)
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Build toolchain
+      working-directory: omr/x86_64/6.1
+      run: |
+        OMR_KERNEL="${{ env.OMR_KERNEL }}" sh build.sh prepare tools/toolchain/install -j$(nproc)
+
+    - name: Build packages
+      working-directory: omr/x86_64/6.1
+      run: |
+        make IGNORE_ERRORS=m -C source package/{compile,install,index} -j$(nproc)
 
     - name: Build image
-      working-directory: omr
+      working-directory: omr/x86_64/6.1
       run: |
-        OMR_TARGET=x86_64
-        OMR_KERNEL=6.1
-        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j$(nproc)
+        make IGNORE_ERRORS=m -C source target/install -j$(nproc)
 
-    - name: Move binaries to workspace
-      working-directory: omr
-      run: |
-        OMR_TARGET=x86_64
-        OMR_KERNEL=6.1
-        mv $OMR_TARGET/$OMR_KERNEL/source/bin $GITHUB_WORKSPACE/
-
-    - name: Deploy - Create directory via SSH
-      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
-      uses: ysurac/ssh-action@master
-      env:
-        SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
       with:
-        command: mkdir -p deploy/${{ env.SOURCE_BRANCH }}/6.1/x86_64
+        name: x86_64_build
+        path: omr/x86_64/6.1/source/bin
+        overwrite: true
+
+    - name: Deploy - Create remote directory via SSH
+      if: github.ref == 'refs/heads/develop'
+      uses: ysurac/ssh-action@master
+      with:
         host: ${{ secrets.OMR_DEPLOY_HOST }}
         user: deploy
         port: ${{ secrets.OMR_DEPLOY_PORT }}
         key: ${{ secrets.PRIVATE_KEY }}
         args: -tt
+        command: |
+          mkdir -p deploy/develop/${{ env.OMR_KERNEL }}/${{ env.OMR_TARGET }}
 
     - name: Deploy - Upload via rsync
-      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
+      if: github.ref == 'refs/heads/develop'
       uses: ysurac/action-rsync@master
-      env:
+      with:
         ARGS: -av --delete-after
-        TARGET: deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/6.1/x86_64
-        SOURCE: ./bin/
+        TARGET: deploy/develop/${{ env.OMR_KERNEL }}/${{ env.OMR_TARGET }}
+        SOURCE: ./omr/x86_64/6.1/source/bin/
         KEY: ${{ secrets.PRIVATE_KEY }}
         USER: deploy
         HOST: ${{ secrets.OMR_DEPLOY_HOST }}
