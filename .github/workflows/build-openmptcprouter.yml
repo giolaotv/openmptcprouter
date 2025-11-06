@@ -3,10 +3,7 @@ name: Build & Release OpenMPTCPRouter x86_64 Kernel 6.12
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - build
-      - develop
+    branches: [ main, build, develop ]
 
 jobs:
   build:
@@ -34,15 +31,15 @@ jobs:
           mkdir -p ${{ env.BUILD_DIR }}
           cd $(dirname ${{ env.BUILD_DIR }})
           git clone --depth=1 -b ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} source
-          cd source
+          cd source/openmptcprouter
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: ⚙️ Cấu hình build cho x86_64 (giữ nguyên omr-dscp)
         run: |
-          cd ${{ env.BUILD_DIR }}
-          if [ -f openmptcprouter/configs/${{ env.TARGET }}.config ]; then
-            cp openmptcprouter/configs/${{ env.TARGET }}.config .config
+          cd ${{ env.BUILD_DIR }}/openmptcprouter
+          if [ -f configs/${{ env.TARGET }}.config ]; then
+            cp configs/${{ env.TARGET }}.config .config
           else
             make defconfig
           fi
@@ -52,7 +49,7 @@ jobs:
 
       - name: 🧱 Build firmware OpenMPTCPRouter
         run: |
-          cd ${{ env.BUILD_DIR }}
+          cd ${{ env.BUILD_DIR }}/openmptcprouter
           echo "⏳ Bắt đầu biên dịch firmware..."
           make -j$(nproc) V=s || make -j1 V=s
           echo "✅ Build hoàn tất"
@@ -60,7 +57,7 @@ jobs:
       - name: 📦 Thu thập firmware output
         run: |
           mkdir -p $GITHUB_WORKSPACE/output
-          find ${{ env.BUILD_DIR }}/bin/targets/x86/64/ -type f \( \
+          find ${{ env.BUILD_DIR }}/openmptcprouter/bin/targets/x86/64/ -type f \( \
             -name "*.img.gz" -o -name "*.ext4*" -o -name "*.squashfs*" -o -name "*.manifest" \
           \) -exec cp {} $GITHUB_WORKSPACE/output/ \;
           ls -lh $GITHUB_WORKSPACE/output
@@ -80,6 +77,5 @@ jobs:
           body: |
             🔥 **OpenMPTCPRouter x86_64 Kernel 6.12 Build Completed**
             - Bao gồm đầy đủ module: omr-dscp, luci-app-omr-dscp, xtables-addons, v.v.
-            - Tự động build từ branch: `${{ env.REPO_BRANCH }}`
-            - Ngày build: ${{ env.TZ }}
+            - Build từ branch: `${{ env.REPO_BRANCH }}`
           files: output/*
