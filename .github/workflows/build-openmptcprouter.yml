@@ -5,8 +5,6 @@ on:
     tags:
       - 'v*'
     branches:
-      - main
-      - master
       - develop
   workflow_dispatch:
     inputs:
@@ -16,15 +14,15 @@ on:
         default: '6.12'
         type: choice
         options:
-        - '6.12'
-        - '6.11'
-        - '6.10'
-        - '6.6'
-        - '6.1'
+          - '6.12'
+          - '6.11'
+          - '6.10'
+          - '6.6'
+          - '6.1'
       openwrt_branch:
         description: 'OpenWrt branch'
         required: true
-        default: 'develop'
+        default: 'openwrt-24.10'
         type: string
       dist:
         description: 'Distribution'
@@ -34,14 +32,14 @@ on:
 
 env:
   KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12' }}
-  OPENWRT_BRANCH: ${{ github.event.inputs.openwrt_branch || 'develop' }}
+  OPENWRT_BRANCH: ${{ github.event.inputs.openwrt_branch || 'openwrt-24.10' }}
   DIST: ${{ github.event.inputs.dist || 'openmptcprouter' }}
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
-
+    
     strategy:
       matrix:
         target: [x86_64]
@@ -55,15 +53,17 @@ jobs:
       with:
         submodules: recursive
         token: ${{ secrets.GITHUB_TOKEN }}
-        ref: ${{ env.OPENWRT_BRANCH }}
+        fetch-depth: 0
+        ref: develop
 
     - name: Setup build environment
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential libncurses5-dev libssl-dev bc flex bison libelf-dev \
-          git wget curl unzip rsync python3 python3-pip zlib1g-dev gawk gettext \
-          sed bash findutils coreutils file gcc-10 g++-10
+          build-essential libncurses5-dev libssl-dev bc flex bison \
+          libelf-dev git wget curl unzip rsync python3 python3-pip \
+          zlib1g-dev gawk gettext sed bash findutils coreutils file \
+          gcc-10 g++-10
 
     - name: Setup build configuration
       run: |
