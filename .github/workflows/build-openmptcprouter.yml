@@ -5,7 +5,7 @@ on:
 
 env:
   REPO_URL: https://github.com/Ysurac/openmptcprouter
-  REPO_BRANCH: main
+  REPO_BRANCH: master
   TZ: Asia/Ho_Chi_Minh
 
 jobs:
