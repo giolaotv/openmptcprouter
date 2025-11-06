@@ -1,10 +1,8 @@
-name: OpenMPTCPRouter x86_64 Kernel 6.1
+name: Build OpenMPTCProuter x86_64 Advanced
 
 on:
   push:
-    branches:
-      - develop
-      - main
+    branches: [ develop ]
   workflow_dispatch:
 
 env:
@@ -19,93 +17,82 @@ jobs:
     continue-on-error: false
 
     steps:
-    - name: Checkout workflow repository
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      run: |
+        git clone $REPO_URL omr
+        cd omr
+        git fetch --all
+        git checkout develop
+        git pull
 
     - name: Prepare environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev \
-          lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
-          libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler python3-pyelftools llvm clang
+        sudo apt-get install -y \
+          build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev \
+          patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs \
+          git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev \
+          xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint \
+          device-tree-compiler python3-pyelftools llvm clang
 
     - name: Free disk space
       run: |
-        df -h
         sudo swapoff -a || true
         sudo rm -f /swapfile || true
         sudo apt-get autoremove -y || true
         sudo apt-get autoclean -y || true
-        sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
         df -h
 
-    - name: Clone OpenMPTCPRouter source
+    - name: Replace dnsmasq with OpenWrt 24.10.4 full version
       run: |
-        git clone $REPO_URL omr
-        cd omr
-        git checkout develop
-        git pull
-        pwd
+        DNSMASQ_DIR="omr/x86_64/6.1/source/package/network/services/dnsmasq"
+        OPENWRT_DL="https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/dnsmasq-full_2.89-1_x86_64.ipk"
 
-    - name: Remove incompatible dnsmasq patches
-      working-directory: omr/x86_64/6.1/source
-      run: |
-        PATCH_DIR="package/network/services/dnsmasq/patches"
-        if [ -d "$PATCH_DIR" ]; then
-          echo "Removing incompatible dnsmasq patches..."
-          rm -f $PATCH_DIR/999-remove-nftset-logs.patch
-          rm -f $PATCH_DIR/200-ubus_dns.patch
-        else
-          echo "Patch directory not found, skipping..."
+        if [ -d "$DNSMASQ_DIR" ]; then
+          echo "Removing old dnsmasq source and patches..."
+          rm -rf $DNSMASQ_DIR/src $DNSMASQ_DIR/patches
         fi
 
-    - name: Update feeds
-      working-directory: omr/x86_64/6.1/source
-      run: |
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        echo "Downloading OpenWrt 24.10.4 dnsmasq-full..."
+        mkdir -p $DNSMASQ_DIR/src
+        cd $DNSMASQ_DIR/src
+        wget -q $OPENWRT_DL -O dnsmasq-full.ipk
+        ar x dnsmasq-full.ipk
+        tar -xvf data.tar.xz
+        cd ../../../../../..
 
     - name: Build toolchain
-      working-directory: omr/x86_64/6.1
+      working-directory: omr
       run: |
-        OMR_KERNEL="${{ env.OMR_KERNEL }}" sh build.sh prepare tools/toolchain/install -j$(nproc)
+        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare tools/toolchain/install -j$(nproc) || \
+        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare tools/toolchain/install -j1 V=s
 
     - name: Build packages
-      working-directory: omr/x86_64/6.1
+      working-directory: omr
       run: |
-        make IGNORE_ERRORS=m -C source package/{compile,install,index} -j$(nproc)
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j$(nproc) || \
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j1 V=s
 
     - name: Build image
-      working-directory: omr/x86_64/6.1
+      working-directory: omr
       run: |
-        make IGNORE_ERRORS=m -C source target/install -j$(nproc)
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j$(nproc) || \
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j1 V=s
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: x86_64_build
-        path: omr/x86_64/6.1/source/bin
+        name: x86_64-${OMR_KERNEL}
+        path: omr/${OMR_TARGET}/${OMR_KERNEL}/source/bin
         overwrite: true
 
-    - name: Deploy - Create remote directory via SSH
-      if: github.ref == 'refs/heads/develop'
-      uses: ysurac/ssh-action@master
-      with:
-        host: ${{ secrets.OMR_DEPLOY_HOST }}
-        user: deploy
-        port: ${{ secrets.OMR_DEPLOY_PORT }}
-        key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-        command: |
-          mkdir -p deploy/develop/${{ env.OMR_KERNEL }}/${{ env.OMR_TARGET }}
-
-    - name: Deploy - Upload via rsync
-      if: github.ref == 'refs/heads/develop'
+    - name: Deploy via SSH and rsync
+      if: ${{ secrets.OMR_DEPLOY_HOST != '' }}
       uses: ysurac/action-rsync@master
-      with:
+      env:
         ARGS: -av --delete-after
-        TARGET: deploy/develop/${{ env.OMR_KERNEL }}/${{ env.OMR_TARGET }}
-        SOURCE: ./omr/x86_64/6.1/source/bin/
+        TARGET: deploy/${OMR_KERNEL}/${OMR_TARGET}
+        SOURCE: ./omr/${OMR_TARGET}/${OMR_KERNEL}/source/bin/
         KEY: ${{ secrets.PRIVATE_KEY }}
         USER: deploy
         HOST: ${{ secrets.OMR_DEPLOY_HOST }}
