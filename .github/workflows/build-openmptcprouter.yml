@@ -38,8 +38,10 @@ jobs:
       working-directory: ./openmptcprouter
       run: |
         chmod +x build.sh
+        ./build.sh clean
         ./build.sh init -t x86_64
         ./build.sh update
+        ./build.sh prereq
         ./build.sh menuconfig noninteractive
 
     - name: 🧮 Build firmware
