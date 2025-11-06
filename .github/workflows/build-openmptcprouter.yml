@@ -33,31 +33,22 @@ jobs:
         mv openmptcprouter openmptcp
         cd openmptcp
         git submodule update --init --recursive
-        ls -la scripts
+        ls -la
 
-    - name: 📦 Update & install feeds
+    - name: ⚙️ Prepare OpenMPTCProuter build system
       working-directory: ./openmptcp
       run: |
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-    - name: ⚙️ Default config for x86_64
-      working-directory: ./openmptcp
-      run: |
-        make menuconfig noninteractive || true
-        echo "CONFIG_TARGET_x86=y" > .config
-        echo "CONFIG_TARGET_x86_64=y" >> .config
-        echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
-        make defconfig
+        ./build init -t x86_64
+        ./build update
+        ./build menuconfig noninteractive
 
     - name: 🧮 Build firmware
       working-directory: ./openmptcp
       run: |
-        make download -j$(nproc) || true
-        make -j$(nproc) || make -j1 V=s
+        ./build build -j$(nproc)
 
     - name: 📁 Upload firmware artifact
       uses: actions/upload-artifact@v4
       with:
         name: openmptcprouter-x86_64
-        path: openmptcp/bin/targets/
+        path: openmptcp/build/output/
