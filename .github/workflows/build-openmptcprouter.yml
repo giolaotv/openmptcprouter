@@ -10,7 +10,6 @@ on:
 env:
   REPO_URL: https://github.com/Ysurac/openmptcprouter
   REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: x86_64.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
@@ -36,23 +35,24 @@ jobs:
           qemu-utils rsync subversion swig time unzip wget zlib1g-dev
 
     - name: 🧱 Clone OpenMPTCProuter source
-      run: |
-        git clone $REPO_URL -b $REPO_BRANCH openmptcprouter
-        cd openmptcprouter
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+      run: git clone $REPO_URL -b $REPO_BRANCH openmptcprouter
 
-    - name: ⚙️ Copy custom config and DIY scripts
+    - name: ⚙️ Prepare build config
       run: |
         [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openmptcprouter/.config
         [ -f $DIY_P1_SH ] && chmod +x $DIY_P1_SH && bash $DIY_P1_SH
         [ -f $DIY_P2_SH ] && chmod +x $DIY_P2_SH && bash $DIY_P2_SH
-        cd openmptcprouter
-        make defconfig
+        cd openmptcprouter && make defconfig
+
+    - name: 📦 Update & install feeds
+      working-directory: ./openmptcprouter
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: 🧮 Build firmware
+      working-directory: ./openmptcprouter
       run: |
-        cd openmptcprouter
         make download -j$(nproc) || true
         make -j$(nproc) || make -j1 V=s
 
