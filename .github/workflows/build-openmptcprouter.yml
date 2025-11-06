@@ -1,4 +1,4 @@
-name: Build OpenMPTCProuter x86_64 Advanced
+name: Build OpenMPTCProuter x86_64
 
 on:
   push:
@@ -43,23 +43,16 @@ jobs:
         sudo apt-get autoclean -y || true
         df -h
 
-    - name: Replace dnsmasq with OpenWrt 24.10.4 full version
+    - name: Remove incompatible dnsmasq patches
       run: |
-        DNSMASQ_DIR="omr/x86_64/6.1/source/package/network/services/dnsmasq"
-        OPENWRT_DL="https://downloads.openwrt.org/releases/24.10.4/packages/x86_64/dnsmasq-full_2.89-1_x86_64.ipk"
-
-        if [ -d "$DNSMASQ_DIR" ]; then
-          echo "Removing old dnsmasq source and patches..."
-          rm -rf $DNSMASQ_DIR/src $DNSMASQ_DIR/patches
+        PATCH_DIR="omr/x86_64/6.1/source/package/network/services/dnsmasq/patches"
+        if [ -d "$PATCH_DIR" ]; then
+          echo "Removing incompatible dnsmasq patches..."
+          rm -f $PATCH_DIR/999-remove-nftset-logs.patch
+          rm -f $PATCH_DIR/200-ubus_dns.patch
+        else
+          echo "Patch directory not found, skipping..."
         fi
-
-        echo "Downloading OpenWrt 24.10.4 dnsmasq-full..."
-        mkdir -p $DNSMASQ_DIR/src
-        cd $DNSMASQ_DIR/src
-        wget -q $OPENWRT_DL -O dnsmasq-full.ipk
-        ar x dnsmasq-full.ipk
-        tar -xvf data.tar.xz
-        cd ../../../../../..
 
     - name: Build toolchain
       working-directory: omr
