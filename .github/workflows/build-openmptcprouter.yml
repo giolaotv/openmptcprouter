@@ -7,10 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/ysurac/openmptcprouter
-  OPENWRT_TAG: v24.10.4
-  OMR_KERNEL: 6.1
-  OMR_TARGET: x86_64
+  REPO_URL: 'https://github.com/ysurac/openmptcprouter'
 
 jobs:
   build:
@@ -18,12 +15,12 @@ jobs:
     continue-on-error: true
 
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v3
       with:
         fetch-depth: 0
 
-    - name: Setup branch/tag info
+    - name: Branch info
       id: branch_name
       run: |
         echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
@@ -34,71 +31,65 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git \
-        libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
+        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext \
+        git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
         subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp \
-        libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake \
-        libtool autopoint device-tree-compiler python3-pyelftools llvm clang
+        libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf \
+        automake libtool autopoint device-tree-compiler python3-pyelftools llvm clang
 
     - name: Free disk space
       run: |
         df -h
         sudo swapoff -a || true
         sudo rm -f /swapfile || true
-        sudo apt-get autoremove -y
-        sudo apt-get autoclean -y
-        sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo docker rmi $(docker images -qf "dangling=true") || true
+        sudo apt-get autoremove -y || true
+        sudo apt-get autoclean -y || true
         df -h
 
-    - name: Clone OpenMPTCPRouter source
+    - name: Clone OMR repository
       run: |
-        git clone $REPO_URL omr
+        git clone ${{ env.REPO_URL }} omr
         cd omr
         git checkout develop
         git pull
 
-    - name: Clone OpenWrt v24.10.4
+    - name: Remove problematic dnsmasq patch
       run: |
-        cd omr
-        git clone https://github.com/openwrt/openwrt.git openwrt
-        cd openwrt
-        git fetch --tags
-        git checkout tags/${OPENWRT_TAG} -b build
+        cd omr/x86_64/6.1/source/package/network/services/dnsmasq/patches
+        if [ -f 999-remove-nftset-logs.patch ]; then
+          mv 999-remove-nftset-logs.patch 999-remove-nftset-logs.patch.bak
+        fi
 
     - name: Build toolchain
+      working-directory: omr
+      env:
+        OMR_KERNEL: 6.1
       run: |
-        cd omr
-        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || \
-        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare {tools,toolchain}/install -j1 V=s
+        OMR_KERNEL="6.1" sh build.sh prepare {tools,toolchain}/install -j$(nproc)
 
     - name: Build packages
+      working-directory: omr
+      env:
+        OMR_KERNEL: 6.1
       run: |
-        cd omr
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j$(nproc) || \
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j1 V=s
+        make IGNORE_ERRORS=m -C x86_64/6.1/source package/{compile,install,index} -j$(nproc)
 
-    - name: Build firmware image
+    - name: Build image
+      working-directory: omr
+      env:
+        OMR_KERNEL: 6.1
       run: |
-        cd omr
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j$(nproc) || \
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j1 V=s
-
-    - name: Move binaries for rsync
-      run: |
-        cd omr
-        mv ${OMR_TARGET}/${OMR_KERNEL}/source/bin ${GITHUB_WORKSPACE}/
+        make IGNORE_ERRORS=m -C x86_64/6.1/source target/install -j$(nproc)
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${OMR_TARGET}-firmware
-        path: ./bin
+        name: x86_64_6.1
+        path: omr/x86_64/6.1/source/bin
         overwrite: true
 
-    # --- Deploy section ---
-    - if: steps.branch_name.outputs.SOURCE_BRANCH == ''
-      name: Deploy - Create directory for tag
+    - name: Deploy - Create directory via SSH
+      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
       uses: ysurac/ssh-action@master
       with:
         host: ${{ secrets.OMR_DEPLOY_HOST }}
@@ -106,40 +97,15 @@ jobs:
         port: ${{ secrets.OMR_DEPLOY_PORT }}
         key: ${{ secrets.PRIVATE_KEY }}
         args: -tt
-        command: |
-          mkdir -p deploy/release/${{ steps.branch_name.outputs.SOURCE_TAG }}/${OMR_TARGET}
+        command: mkdir -p deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/6.1/x86_64
 
-    - if: steps.branch_name.outputs.SOURCE_BRANCH != ''
-      name: Deploy - Create directory for branch
-      uses: ysurac/ssh-action@master
-      with:
-        host: ${{ secrets.OMR_DEPLOY_HOST }}
-        user: deploy
-        port: ${{ secrets.OMR_DEPLOY_PORT }}
-        key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-        command: |
-          mkdir -p deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
-
-    - if: steps.branch_name.outputs.SOURCE_BRANCH == ''
-      name: Deploy - Upload via rsync (tag)
+    - name: Deploy - Upload via rsync
+      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
       uses: ysurac/action-rsync@master
-      with:
+      env:
         ARGS: -av --delete-after
-        TARGET: deploy/release/${{ steps.branch_name.outputs.SOURCE_TAG }}/${OMR_TARGET}
-        SOURCE: ./bin/
-        KEY: ${{ secrets.PRIVATE_KEY }}
-        USER: deploy
-        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
-        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
-
-    - if: steps.branch_name.outputs.SOURCE_BRANCH != ''
-      name: Deploy - Upload via rsync (branch)
-      uses: ysurac/action-rsync@master
-      with:
-        ARGS: -av --delete-after
-        TARGET: deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
-        SOURCE: ./bin/
+        TARGET: deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/6.1/x86_64
+        SOURCE: ./omr/x86_64/6.1/source/bin/
         KEY: ${{ secrets.PRIVATE_KEY }}
         USER: deploy
         HOST: ${{ secrets.OMR_DEPLOY_HOST }}
