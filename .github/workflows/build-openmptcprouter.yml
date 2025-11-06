@@ -1,228 +1,166 @@
-name: Build OpenMPTCPRouter x86_64 (Kernel 6.1 + OpenWrt 24.10.4)
-
-on:
-  push:
-    branches:
-      - develop
-    tags:
-      - 'v*'
-  workflow_dispatch:
+name: openmptcprouter
+on: [push]
 
 env:
-  KERNEL_VERSION: 6.1
-  OPENWRT_BRANCH: openwrt-24.10
-  DIST: openmptcprouter
+  REPO_URL: 'https://github.com/ysurac/openmptcprouter'
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 240
+    strategy:
+      matrix:
+        OMR_TARGET: [bpi-r1, bpi-r2, bpi-r3, bpi-r4, bpi-r4-poe, bpi-r64, rpi2, rpi4, wrt32x, espressobin, r2s, rpi3, wrt3200acm, x86, x86_64, ubnt-erx, r4s, r7800, rutx12, rutx50, r5s, qnap-301w, rpi5, z8102ax_128m, z8102ax_64m, z8102ax-emmc, gl-mt6000, gl-mt3000, gl-mt2500, r5c, z8109ax_128m]
+        OMR_KERNEL: [6.6, 6.12]
+    runs-on: ubuntu-latest
+    continue-on-error: true
 
     steps:
-    - name: Checkout repository (full history & submodules)
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 0
-
-    - name: Cache OpenWrt downloads and build_dir
-      uses: actions/cache@v4
-      with:
-        path: |
-          dl
-          build_dir
-          feeds
-          .ccache
-        key: ${{ runner.os }}-openwrt-${{ env.OPENWRT_BRANCH }}-omr-${{ env.KERNEL_VERSION }}-v1
-        restore-keys: |
-          ${{ runner.os }}-openwrt-${{ env.OPENWRT_BRANCH }}-omr-
-
-    - name: Install dependencies (with retry)
+    - name: Branch name
+      id: branch_name
       run: |
-        set -euxo pipefail
-        retry() {
-          local n=0
-          local max=5
-          local delay=5
-          until [ $n -ge $max ]
-          do
-            "$@" && break
-            n=$((n+1))
-            echo "Command failed. Retry $n/$max in $delay s..."
-            sleep $delay
-            delay=$((delay * 2))
-          done
-          if [ $n -ge $max ]; then
-            echo "Command failed after $max attempts: $*"
-            return 1
-          fi
-        }
+        echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+        echo "SOURCE_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_OUTPUT
+    - name: Prepare
+      run: |
         sudo apt-get update
-        retry sudo apt-get install -y --no-install-recommends \
-          build-essential libncurses5-dev libssl-dev bc flex bison libelf-dev git wget curl unzip rsync \
-          python3 python3-pip zlib1g-dev gawk gettext sed bash findutils coreutils file \
-          gcc-10 g++-10 ccache
-        # Use gcc-10/g++-10 explicitly
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 || true
-        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100 || true
-        sudo update-alternatives --set gcc /usr/bin/gcc-10 || true
-        sudo update-alternatives --set g++ /usr/bin/g++-10 || true
-        gcc --version
-        g++ --version
-        # Configure ccache
-        export CCACHE_DIR="$HOME/.ccache"
-        mkdir -p "$CCACHE_DIR"
-        ccache -M 5G || true
-        ccache -s || true
-
-    - name: Pre-build checks (disk, memory)
+        sudo apt-get install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler python3-pyelftools llvm clang
+    - if: matrix.OMR_KERNEL == '6.6'
+      name: Install LLVM
       run: |
-        set -euxo pipefail
-        # Disk: require at least 10GB free in workspace
-        avail_kb=$(df --output=avail -k "$PWD" | tail -1)
-        avail_mb=$((avail_kb/1024))
-        echo "Available disk (MB): $avail_mb"
-        if [ "$avail_mb" -lt 10240 ]; then
-          echo "ERROR: Not enough free disk space (<10GB). Aborting."
-          df -h .
-          exit 1
-        fi
-        # RAM: require at least 2GB
-        mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-        mem_mb=$((mem_kb/1024))
-        echo "Total RAM (MB): $mem_mb"
-        if [ "$mem_mb" -lt 2048 ]; then
-          echo "WARNING: Less than 2GB RAM; build may fail or be very slow."
-        fi
-
-    - name: Prepare source overlays
+        sudo apt-get install llvm clang
+    - name: Free disk space
       run: |
-        set -euxo pipefail
-        mkdir -p x86_64/6.1/source
-        if [ -d common ]; then
-          echo "Copying common overlays..."
-          rsync -a --delete common/ x86_64/6.1/source/
+        df -h
+        sudo swapoff -a >/dev/null 2>&1 || true
+        sudo rm -f /swapfile >/dev/null 2>&1 || true
+        sudo apt-get autoremove -y >/dev/null 2>&1 || true
+        sudo apt-get autoclean -y >/dev/null 2>&1 || true
+        sudo rm -rf "/usr/local/share/boost" >/dev/null 2>&1 || true
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY" >/dev/null 2>&1 || true
+        sudo rm -rf /usr/share/dotnet >/dev/null 2>&1 || true
+        sudo rm -rf /usr/local/lib/android >/dev/null 2>&1 || true
+        sudo rm -rf /opt/ghc >/dev/null 2>&1 || true
+        sudo docker rmi $(docker images -qf "dangling=true") >/dev/null 2>&1 || true
+        df -h
+    - name: Clone source code
+      working-directory: ../../
+      env: 
+        REPO_URL: https://github.com/ysurac/openmptcprouter
+        SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
+        GITHUB_WORKSPACE: ${{ steps.branch_name.outputs.WORKSPACE }}
+      run: |
+        git clone $REPO_URL omr
+        if [ "$SOURCE_NAME" != "develop" ]; then
+          cd omr
+          pwd
+          git fetch
+          git checkout master
         else
-          echo "No common overlays found, skipping..."
+          cd omr
+          git checkout develop
         fi
-        if [ -d 6.1 ]; then
-          echo "Copying 6.1 overlays..."
-          rsync -a --delete 6.1/ x86_64/6.1/source/
-        else
-          echo "No 6.1 overlays found, skipping..."
-        fi
-
-    - name: Apply patches safely
-      run: |
-        set -euxo pipefail
-        PATCH_FILE="patches/package-ipkg.mk.patch"
-        TARGET_FILE="x86_64/6.1/source/include/package-ipkg.mk"
-        if [ -f "$PATCH_FILE" ] && [ -f "$TARGET_FILE" ]; then
-          echo "Attempting git apply..."
-          if git apply --check "$PATCH_FILE"; then
-            git apply "$PATCH_FILE"
-            echo "Patch applied via git apply."
-          else
-            echo "git apply check failed; trying fallback patch (non-fatal)."
-            ( cd "$(dirname "$TARGET_FILE")" && patch -p0 "$TARGET_FILE" < "../../$PATCH_FILE" ) || true
-            echo "Fallback patch attempt finished."
-          fi
-        else
-          echo "Patch or target not found; skipping."
-        fi
-
-    - name: Make build.sh executable
-      run: |
-        chmod +x build.sh
-        ls -l build.sh
-
-    - name: Build OpenMPTCPRouter (capture logs)
-      run: |
-        set -euxo pipefail
-        echo "Starting build: logging to build.log"
-        mkdir -p build_logs
-        ./build.sh --kernel ${KERNEL_VERSION} --target x86_64 --dist ${DIST} 2>&1 | tee build_logs/build.log
-        exit ${PIPESTATUS[0]}
+        git pull
+        pwd
+    - name: Build toolchain
+      working-directory: ../../omr
       env:
-        OMR_KERNEL: 6.1
-        OMR_TARGET: x86_64
-        OMR_DIST: openmptcprouter
-        OMR_OPENWRT: openwrt-24.10
-        OMR_ALL_PACKAGES: "yes"
-        OMR_IMG: "yes"
-        OMR_KEEPBIN: "no"
-        OMR_LOG: "yes"
-        FORCE_UNSAFE_CONFIGURE: 1
-        DEBIAN_FRONTEND: noninteractive
-
-    - name: Archive build log (always)
-      if: always()
+        OMR_FEED_URL: https://github.com/ysurac/openmptcprouter-feeds
+        SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
+        OMR_TARGET: ${{ matrix.OMR_TARGET }}
+        OMR_KERNEL: ${{ matrix.OMR_KERNEL }}
+        OMR_HOST: ${{ secrets.OMR_HOST }}
+        OMR_PORT: ${{ secrets.OMR_PORT }}
+      run: |
+        OMR_KERNEL="${OMR_KERNEL}" OMR_FEED_SRC="${SOURCE_NAME}" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || OMR_KERNEL="${OMR_KERNEL}" OMR_FEED_SRC="${SOURCE_NAME}" sh build.sh prepare {tools,toolchain}/install -j1 V=s
+        #echo -e "${{ secrets.OMR_PRIVKEY }}" > $OMR_TARGET/$OMR_KERNEL/source/key-build
+        #echo -e "${{ secrets.OMR_PUBKEY }}" > $OMR_TARGET/$OMR_KERNEL/source/key-build.pub
+    - name: Build packages
+      working-directory: ../../omr
+      env:
+        OMR_TARGET: ${{ matrix.OMR_TARGET }}
+        OMR_KERNEL: ${{ matrix.OMR_KERNEL }}
+      run: |
+        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j$(nproc) || make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j1 V=s
+    - name: Build image
+      working-directory: ../../omr
+      env:
+        OMR_TARGET: ${{ matrix.OMR_TARGET }}
+        OMR_KERNEL: ${{ matrix.OMR_KERNEL }}
+      run: |
+        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j$(nproc) || make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j1 V=s
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build-log
-        path: build_logs/build.log
-        retention-days: 30
-
-    - name: List firmware files (non-fatal)
-      run: |
-        echo "=== Firmware files ==="
-        find bin/targets/x86/64/ -type f \( -iname \"*.img*\" -o -iname \"*.bin\" -o -iname \"*.tar.gz\" \) -print | sort || true
-        echo "=== File sizes ==="
-        find bin/targets/x86/64/ -type f \( -iname \"*.img*\" -o -iname \"*.bin\" -o -iname \"*.tar.gz\" \) -exec ls -lh {} \; || true
-
-    - name: Generate SHA256 checksums (robust)
-      run: |
-        set -euxo pipefail
-        mkdir -p bin/targets/x86/64/
-        cd bin/targets/x86/64/
-        tmpfile=$(mktemp)
-        find . -maxdepth 1 -type f \( -iname \"*.img*\" -o -iname \"*.bin\" -o -iname \"*.tar.gz\" \) -print0 | xargs -0 --no-run-if-empty sha256sum > \"$tmpfile\" || true
-        if [ -s \"$tmpfile\" ]; then
-          mv \"$tmpfile\" sha256sums.txt
-        else
-          echo "No firmware files found; creating empty sha256sums.txt"
-          : > sha256sums.txt
-          rm -f \"$tmpfile\"
-        fi
-        cat sha256sums.txt
-
-    - name: Upload build artifacts (only existing files)
-      uses: actions/upload-artifact@v4
-      with:
-        name: openmptcprouter-6.1-x86_64
-        path: |
-          bin/targets/x86/64/*.img*
-          bin/targets/x86/64/*.bin
-          bin/targets/x86/64/*.tar.gz
-          bin/targets/x86/64/sha256sums.txt
-        retention-days: 30
-        compression-level: 0
-
-    - name: Prepare release assets
-      if: startsWith(github.ref, 'refs/tags/')
-      run: |
-        set -euxo pipefail
-        mkdir -p release_assets
-        cp -r bin/targets/x86/64/* release_assets/ || true
-        echo "=== Release assets ==="
-        ls -la release_assets/ || true
-
-  release:
-    needs: build
-    runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: artifacts/*
-        generate_release_notes: true
+        name: ${{ matrix.OMR_TARGET }}
+        path: /home/runner/work/omr/${{ matrix.OMR_TARGET }}/${{ matrix.OMR_KERNEL }}/source/bin
+        overwrite: true
+    - if: steps.branch_name.outputs.SOURCE_BRANCH == ''
+      name: Deploy - Create directory
+      uses: ysurac/ssh-action@master
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
+          SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
+          SOURCE_TAG: ${{ steps.branch_name.outputs.SOURCE_TAG }}
+      with:
+        command: |
+          mkdir -p deploy/release/${{env.SOURCE_TAG}}/${{matrix.OMR_TARGET}}
+        host: ${{ secrets.OMR_DEPLOY_HOST }}
+        user: deploy
+        port: ${{ secrets.OMR_DEPLOY_PORT }}
+        key: ${{ secrets.PRIVATE_KEY }}
+        args: -tt
+    - if: steps.branch_name.outputs.SOURCE_BRANCH != ''
+      name: Deploy - Create directory
+      uses: ysurac/ssh-action@master
+      env:
+          SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
+          SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
+          SOURCE_TAG: ${{ steps.branch_name.outputs.SOURCE_TAG }}
+      with:
+        command: |
+          mkdir -p deploy/${{env.SOURCE_BRANCH}}/${{matrix.OMR_KERNEL}}/${{matrix.OMR_TARGET}}
+        host: ${{ secrets.OMR_DEPLOY_HOST }}
+        user: deploy
+        port: ${{ secrets.OMR_DEPLOY_PORT }}
+        key: ${{ secrets.PRIVATE_KEY }}
+        args: -tt
+    - name: Move binaries for rsync
+      working-directory: ../../omr
+      env:
+        OMR_TARGET: ${{ matrix.OMR_TARGET }}
+        OMR_KERNEL: ${{ matrix.OMR_KERNEL }}
+        GITHUB_WORKSPACE: ${{ steps.branch_name.outputs.WORKSPACE }}
+      run: |
+        mv ${OMR_TARGET}/${OMR_KERNEL}/source/bin ${GITHUB_WORKSPACE}/
+    - if: steps.branch_name.outputs.SOURCE_BRANCH == ''
+      name: Deploy - Upload via rsync
+      uses: ysurac/action-rsync@master
+      env:
+        ARGS: -av --delete-after
+        TARGET: deploy/release/${{steps.branch_name.outputs.SOURCE_TAG}}/${{matrix.OMR_TARGET}}
+        SOURCE: ./bin/
+        KEY: ${{ secrets.PRIVATE_KEY }}
+        USER: deploy
+        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
+        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
+        SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
+        SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
+        SOURCE_TAG: ${{ steps.branch_name.outputs.SOURCE_TAG }}
+        GITHUB_WORKSPACE: ${{ steps.branch_name.outputs.WORKSPACE }}
+    - if: steps.branch_name.outputs.SOURCE_BRANCH != ''
+      name: Deploy - Upload via rsync
+      uses: ysurac/action-rsync@master
+      env:
+        ARGS: -av --delete-after
+        TARGET: deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/${{matrix.OMR_KERNEL}}/${{matrix.OMR_TARGET}}
+        SOURCE: ./bin/
+        KEY: ${{ secrets.PRIVATE_KEY }}
+        USER: deploy
+        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
+        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
+        SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
+        SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
+        SOURCE_TAG: ${{ steps.branch_name.outputs.SOURCE_TAG }}
+        GITHUB_WORKSPACE: ${{ steps.branch_name.outputs.WORKSPACE }}
+
