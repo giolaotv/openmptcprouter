@@ -167,9 +167,9 @@ jobs:
     - name: List firmware files (non-fatal)
       run: |
         echo "=== Firmware files ==="
-        find bin/targets/x86/64/ -type f \( -iname "*.img*" -o -iname "*.bin" -o -iname "*.tar.gz" \) -print | sort || true
+        find bin/targets/x86/64/ -type f \( -iname \"*.img*\" -o -iname \"*.bin\" -o -iname \"*.tar.gz\" \) -print | sort || true
         echo "=== File sizes ==="
-        find bin/targets/x86/64/ -type f \( -iname "*.img*" -o -iname "*.bin" -o -iname "*.tar.gz" \) -exec ls -lh {} \; || true
+        find bin/targets/x86/64/ -type f \( -iname \"*.img*\" -o -iname \"*.bin\" -o -iname \"*.tar.gz\" \) -exec ls -lh {} \; || true
 
     - name: Generate SHA256 checksums (robust)
       run: |
@@ -177,13 +177,13 @@ jobs:
         mkdir -p bin/targets/x86/64/
         cd bin/targets/x86/64/
         tmpfile=$(mktemp)
-        find . -maxdepth 1 -type f \( -iname "*.img*" -o -iname "*.bin" -o -iname "*.tar.gz" \) -print0 | xargs -0 --no-run-if-empty sha256sum > "$tmpfile" || true
-        if [ -s "$tmpfile" ]; then
-          mv "$tmpfile" sha256sums.txt
+        find . -maxdepth 1 -type f \( -iname \"*.img*\" -o -iname \"*.bin\" -o -iname \"*.tar.gz\" \) -print0 | xargs -0 --no-run-if-empty sha256sum > \"$tmpfile\" || true
+        if [ -s \"$tmpfile\" ]; then
+          mv \"$tmpfile\" sha256sums.txt
         else
           echo "No firmware files found; creating empty sha256sums.txt"
           : > sha256sums.txt
-          rm -f "$tmpfile"
+          rm -f \"$tmpfile\"
         fi
         cat sha256sums.txt
 
