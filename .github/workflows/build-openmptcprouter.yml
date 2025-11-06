@@ -1,26 +1,23 @@
-name: Build OpenMPTCPRouter x86_64 (Kernel 6.1 + OpenWrt 24.10.4)
+name: Build OpenMPTCPRouter x86_64
 
 on:
   push:
-    tags:
-      - 'v*'
     branches:
       - develop
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 env:
   KERNEL_VERSION: "6.1"
   OPENWRT_BRANCH: "openwrt-24.10"
   DIST: "openmptcprouter"
+  TARGET: "x86_64"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
-    
-    strategy:
-      matrix:
-        target: [x86_64]
 
     steps:
     - name: Checkout repository
@@ -29,54 +26,44 @@ jobs:
         submodules: recursive
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Setup build environment
+    - name: Install build dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          libncurses5-dev \
-          libssl-dev \
-          bc \
-          flex \
-          bison \
-          libelf-dev \
-          git \
-          wget \
-          curl \
-          unzip \
-          rsync \
-          python3 \
-          python3-pip \
-          zlib1g-dev \
-          gawk \
-          gettext \
-          sed \
-          bash \
-          findutils \
-          coreutils \
-          file \
-          gcc-10 \
-          g++-10
+          build-essential libncurses5-dev libssl-dev bc flex bison \
+          libelf-dev git wget curl unzip rsync python3 python3-pip \
+          zlib1g-dev gawk gettext sed bash findutils coreutils file \
+          gcc-10 g++-10
 
     - name: Prepare source directories
       run: |
-        # Tạo thư mục source nếu chưa có
         mkdir -p x86_64/6.1/source/
 
-        # Copy common overlays nếu tồn tại
         if [ -d common ]; then
+          echo "Copying common overlays..."
           cp -rf common/* x86_64/6.1/source/
+        else
+          echo "No common overlays found, skipping..."
         fi
 
-        # Copy 6.1 overlays nếu tồn tại
         if [ -d 6.1 ]; then
+          echo "Copying 6.1 overlays..."
           cp -rf 6.1/* x86_64/6.1/source/
+        else
+          echo "No 6.1 overlays found, skipping..."
+        fi
+
+        # Apply patch only if file exists
+        if [ -f x86_64/6.1/source/include/package-ipkg.mk ]; then
+          patch x86_64/6.1/source/include/package-ipkg.mk < patches/package-ipkg.mk.patch || true
+        else
+          echo "Patch target not found, skipping..."
         fi
 
     - name: Setup build configuration
       run: |
         echo "OMR_KERNEL=${{ env.KERNEL_VERSION }}" >> $GITHUB_ENV
-        echo "OMR_TARGET=x86_64" >> $GITHUB_ENV
+        echo "OMR_TARGET=${{ env.TARGET }}" >> $GITHUB_ENV
         echo "OMR_DIST=${{ env.DIST }}" >> $GITHUB_ENV
         echo "OMR_OPENWRT=${{ env.OPENWRT_BRANCH }}" >> $GITHUB_ENV
         echo "OMR_ALL_PACKAGES=yes" >> $GITHUB_ENV
@@ -89,11 +76,11 @@ jobs:
       run: |
         ./build.sh \
           --kernel ${{ env.KERNEL_VERSION }} \
-          --target x86_64 \
+          --target ${{ env.TARGET }} \
           --dist ${{ env.DIST }}
       env:
         OMR_KERNEL: ${{ env.KERNEL_VERSION }}
-        OMR_TARGET: x86_64
+        OMR_TARGET: ${{ env.TARGET }}
         OMR_DIST: ${{ env.DIST }}
         OMR_OPENWRT: ${{ env.OPENWRT_BRANCH }}
         OMR_ALL_PACKAGES: "yes"
@@ -104,24 +91,22 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       timeout-minutes: 160
 
-    - name: List all firmware files
+    - name: List firmware files
       run: |
         echo "=== Firmware files ==="
         find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) | sort
-        echo "=== File sizes ==="
         find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) -exec ls -lh {} \;
 
     - name: Generate SHA256 checksums
       run: |
         cd bin/targets/x86/64/
         sha256sum * > sha256sums.txt
-        echo "=== SHA256 Checksums ==="
         cat sha256sums.txt
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openmptcprouter-${{ env.KERNEL_VERSION }}-x86_64
+        name: openmptcprouter-${{ env.KERNEL_VERSION }}-${{ env.TARGET }}
         path: |
           bin/targets/x86/64/*.img*
           bin/targets/x86/64/*.bin
@@ -130,34 +115,16 @@ jobs:
         retention-days: 30
         compression-level: 0
 
-    - name: Prepare release assets
-      if: startsWith(github.ref, 'refs/tags/')
-      run: |
-        mkdir -p release_assets
-        cp -r bin/targets/x86/64/*.img* release_assets/ || true
-        cp -r bin/targets/x86/64/*.bin release_assets/ || true
-        cp -r bin/targets/x86/64/*.tar.gz release_assets/ || true
-        cp bin/targets/x86/64/sha256sums.txt release_assets/ || true
-        echo "=== Release assets prepared ==="
-        ls -la release_assets/
-
   release:
     needs: build
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
-
-    - name: Display artifact structure
-      run: |
-        echo "=== Artifact structure ==="
-        find artifacts -type f -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" | sort
-        echo "=== Total files ==="
-        find artifacts -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" -o -name "sha256sums.txt" \) | wc -l
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
