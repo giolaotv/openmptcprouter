@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - master
+      - main
       - build
-      - 6.12
+      - develop
 
 jobs:
   build:
