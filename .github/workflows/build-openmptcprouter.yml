@@ -1,4 +1,4 @@
-name: Build OpenMPTCPRouter x86_64 (Kernel 6.1, OpenWrt 24.10.4)
+name: Build OpenMPTCPRouter x86_64 (Kernel 6.1 + OpenWrt 24.10.4)
 
 on:
   push:
@@ -10,14 +10,14 @@ on:
 
 env:
   KERNEL_VERSION: "6.1"
-  OPENWRT_BRANCH: "openwrt-24.10.4"
+  OPENWRT_BRANCH: "openwrt-24.10"
   DIST: "openmptcprouter"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
-
+    timeout-minutes: 180
+    
     strategy:
       matrix:
         target: [x86_64]
@@ -33,39 +33,54 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential libncurses5-dev libssl-dev bc flex bison \
-          libelf-dev git wget curl unzip rsync python3 python3-pip \
-          zlib1g-dev gawk gettext sed bash findutils coreutils file \
-          gcc-10 g++-10
+          build-essential \
+          libncurses5-dev \
+          libssl-dev \
+          bc \
+          flex \
+          bison \
+          libelf-dev \
+          git \
+          wget \
+          curl \
+          unzip \
+          rsync \
+          python3 \
+          python3-pip \
+          zlib1g-dev \
+          gawk \
+          gettext \
+          sed \
+          bash \
+          findutils \
+          coreutils \
+          file \
+          gcc-10 \
+          g++-10
 
-    - name: Setup build configuration
+    - name: Prepare source directories
       run: |
-        echo "OMR_KERNEL=${{ env.KERNEL_VERSION }}" >> $GITHUB_ENV
-        echo "OMR_TARGET=${{ matrix.target }}" >> $GITHUB_ENV
-        echo "OMR_DIST=${{ env.DIST }}" >> $GITHUB_ENV
-        echo "OMR_OPENWRT=${{ env.OPENWRT_BRANCH }}" >> $GITHUB_ENV
-        echo "OMR_ALL_PACKAGES=yes" >> $GITHUB_ENV
-        echo "OMR_IMG=yes" >> $GITHUB_ENV
+        # Tạo thư mục source nếu chưa có
+        mkdir -p x86_64/6.1/source/
 
-    - name: Copy overlays
-      run: |
-        # Copy common overlays if exist
+        # Copy common overlays nếu tồn tại
         if [ -d common ]; then
           cp -rf common/* x86_64/6.1/source/
         fi
-        # Copy 6.1 overlays if exist
+
+        # Copy 6.1 overlays nếu tồn tại
         if [ -d 6.1 ]; then
           cp -rf 6.1/* x86_64/6.1/source/
         fi
 
-    - name: Apply patches
+    - name: Setup build configuration
       run: |
-        if [ -d patches ]; then
-          for f in patches/*.patch; do
-            [ -f "$f" ] || continue
-            patch -s -p1 < "$f" || echo "Patch $f skipped"
-          done
-        fi
+        echo "OMR_KERNEL=${{ env.KERNEL_VERSION }}" >> $GITHUB_ENV
+        echo "OMR_TARGET=x86_64" >> $GITHUB_ENV
+        echo "OMR_DIST=${{ env.DIST }}" >> $GITHUB_ENV
+        echo "OMR_OPENWRT=${{ env.OPENWRT_BRANCH }}" >> $GITHUB_ENV
+        echo "OMR_ALL_PACKAGES=yes" >> $GITHUB_ENV
+        echo "OMR_IMG=yes" >> $GITHUB_ENV
 
     - name: Make build.sh executable
       run: chmod +x build.sh
@@ -74,11 +89,11 @@ jobs:
       run: |
         ./build.sh \
           --kernel ${{ env.KERNEL_VERSION }} \
-          --target ${{ matrix.target }} \
+          --target x86_64 \
           --dist ${{ env.DIST }}
       env:
         OMR_KERNEL: ${{ env.KERNEL_VERSION }}
-        OMR_TARGET: ${{ matrix.target }}
+        OMR_TARGET: x86_64
         OMR_DIST: ${{ env.DIST }}
         OMR_OPENWRT: ${{ env.OPENWRT_BRANCH }}
         OMR_ALL_PACKAGES: "yes"
@@ -87,13 +102,12 @@ jobs:
         OMR_LOG: "yes"
         FORCE_UNSAFE_CONFIGURE: 1
         DEBIAN_FRONTEND: noninteractive
-      timeout-minutes: 180
+      timeout-minutes: 160
 
     - name: List all firmware files
       run: |
-        echo "=== Firmware files for ${{ matrix.target }} ==="
+        echo "=== Firmware files ==="
         find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) | sort
-        echo ""
         echo "=== File sizes ==="
         find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) -exec ls -lh {} \;
 
@@ -107,7 +121,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openmptcprouter-${{ env.KERNEL_VERSION }}-${{ matrix.target }}
+        name: openmptcprouter-${{ env.KERNEL_VERSION }}-x86_64
         path: |
           bin/targets/x86/64/*.img*
           bin/targets/x86/64/*.bin
