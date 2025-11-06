@@ -1,24 +1,25 @@
-name: openmptcprouter-x86_64
+name: openmptcprouter
 
 on:
   push:
-    branches: [develop]
-  workflow_dispatch:
+    branches:
+      - develop
+    tags:
+      - 'v*'
 
 env:
   REPO_URL: 'https://github.com/ysurac/openmptcprouter'
-  OMR_FEED_URL: 'https://github.com/ysurac/openmptcprouter-feeds'
+  OPENWRT_TAG: 'v24.10.4'
+  OMR_KERNEL: '6.1'
+  OMR_TARGET: 'x86_64'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     continue-on-error: true
-    env:
-      OMR_TARGET: x86_64
-      OMR_KERNEL: 6.1
 
     steps:
-    - name: Branch info
+    - name: Set branch/tag info
       id: branch_name
       run: |
         echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
@@ -26,14 +27,16 @@ jobs:
         echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_OUTPUT
 
-    - name: Prepare environment
+    - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext \
-        git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
-        subversion flex uglifyjs gcc-multilib p7zip-full msmtp libssl-dev texinfo \
-        libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint \
-        device-tree-compiler python3-pyelftools llvm clang
+        sudo apt-get install -y \
+          build-essential asciidoc binutils bzip2 gawk gettext git \
+          libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 \
+          libc6-dev-i386 subversion flex uglifyjs gcc-multilib \
+          p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev \
+          xmlto qemu-utils upx libelf-dev autoconf automake libtool \
+          autopoint device-tree-compiler python3-pyelftools llvm clang
 
     - name: Free disk space
       run: |
@@ -42,70 +45,50 @@ jobs:
         sudo rm -f /swapfile || true
         sudo apt-get autoremove -y
         sudo apt-get autoclean -y
-        sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo docker rmi $(docker images -qf "dangling=true") || true
         df -h
 
-    - name: Clone OpenMPTCPRouter source
+    - name: Clone source code
       run: |
         git clone $REPO_URL omr
         cd omr
-        git fetch --all --tags
-        git checkout openwrt-24.10 -b build
+        git fetch --tags
+        # Checkout develop branch of OMR
+        git checkout develop
         git pull
+        pwd
+
+    - name: Checkout OpenWrt v24.10.4
+      working-directory: ../../omr
+      run: |
+        cd openwrt
+        git fetch --tags
+        git checkout tags/${OPENWRT_TAG} -b build
 
     - name: Build toolchain
-      working-directory: ./omr
+      working-directory: ../../omr
+      env:
+        OMR_FEED_URL: https://github.com/ysurac/openmptcprouter-feeds
       run: |
-        OMR_KERNEL="${{ env.OMR_KERNEL }}" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || \
-        OMR_KERNEL="${{ env.OMR_KERNEL }}" sh build.sh prepare {tools,toolchain}/install -j1 V=s
+        OMR_KERNEL="${OMR_KERNEL}" OMR_FEED_SRC="develop" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || \
+        OMR_KERNEL="${OMR_KERNEL}" OMR_FEED_SRC="develop" sh build.sh prepare {tools,toolchain}/install -j1 V=s
 
     - name: Build packages
-      working-directory: ./omr
+      working-directory: ../../omr
       run: |
-        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j$(nproc) || \
-        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j1 V=s
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j$(nproc) || \
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j1 V=s
 
     - name: Build image
-      working-directory: ./omr
+      working-directory: ../../omr
       run: |
-        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j$(nproc) || \
-        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j1 V=s
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j$(nproc) || \
+        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j1 V=s
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: x86_64-bin
-        path: ./omr/$OMR_TARGET/$OMR_KERNEL/source/bin
+        name: ${OMR_TARGET}
+        path: /home/runner/work/omr/${OMR_TARGET}/${OMR_KERNEL}/source/bin
         overwrite: true
-
-    - name: Create deploy directory
-      uses: ysurac/ssh-action@master
-      env:
-        SOURCE_NAME: ${{ steps.branch_name.outputs.SOURCE_NAME }}
-        SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
-        OMR_KERNEL: ${{ env.OMR_KERNEL }}
-        OMR_TARGET: ${{ env.OMR_TARGET }}
-      with:
-        command: |
-          mkdir -p deploy/${SOURCE_BRANCH}/${OMR_KERNEL}/${OMR_TARGET}
-        host: ${{ secrets.OMR_DEPLOY_HOST }}
-        user: deploy
-        port: ${{ secrets.OMR_DEPLOY_PORT }}
-        key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-
-    - name: Move binaries for rsync
-      run: |
-        mv ./omr/$OMR_TARGET/$OMR_KERNEL/source/bin ./bin
-
-    - name: Deploy binaries via rsync
-      uses: ysurac/action-rsync@master
-      env:
-        ARGS: -av --delete-after
-        TARGET: deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/$OMR_KERNEL/$OMR_TARGET
-        SOURCE: ./bin/
-        KEY: ${{ secrets.PRIVATE_KEY }}
-        USER: deploy
-        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
-        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
