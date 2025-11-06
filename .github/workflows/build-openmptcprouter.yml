@@ -1,11 +1,11 @@
-name: Build OpenMPTCProuter x86_64
+name: Build OpenMPTCProuter (develop) x86_64
 
 on:
   workflow_dispatch:
 
 env:
   REPO_URL: https://github.com/Ysurac/openmptcprouter
-  REPO_BRANCH: master
+  REPO_BRANCH: develop
   TZ: Asia/Ho_Chi_Minh
 
 jobs:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: 🧰 Checkout (your workflow)
+    - name: 🧰 Checkout workflow
       uses: actions/checkout@v4
 
     - name: 🕓 Set timezone
@@ -27,7 +27,7 @@ jobs:
           python3-setuptools python3-pip qemu-utils rsync subversion swig time unzip \
           wget zlib1g-dev
 
-    - name: 🧱 Clone OpenMPTCProuter official source
+    - name: 🧱 Clone OpenMPTCProuter (develop branch)
       run: |
         git clone --depth=1 $REPO_URL -b $REPO_BRANCH
         cd openmptcprouter
@@ -37,14 +37,15 @@ jobs:
     - name: ⚙️ Initialize OMR build system
       working-directory: ./openmptcprouter
       run: |
-        ./build init -t x86_64
-        ./build update
-        ./build menuconfig noninteractive
+        chmod +x build.sh
+        ./build.sh init -t x86_64
+        ./build.sh update
+        ./build.sh menuconfig noninteractive
 
     - name: 🧮 Build firmware
       working-directory: ./openmptcprouter
       run: |
-        ./build build -j$(nproc)
+        ./build.sh build -j$(nproc)
 
     - name: 📁 Upload firmware
       uses: actions/upload-artifact@v4
