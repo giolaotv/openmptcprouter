@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       REPO_URL: https://github.com/Ysurac/openmptcprouter.git
-      REPO_BRANCH: 6.12
+      REPO_BRANCH: develop
       TARGET: x86_64
       BUILD_DIR: openmptcprouter/x86_64/6.12/source
       TZ: Asia/Ho_Chi_Minh
@@ -29,7 +29,7 @@ jobs:
             gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
             python3-distutils rsync unzip zlib1g-dev file wget curl time
 
-      - name: 📥 Clone mã nguồn OpenMPTCPRouter (branch 6.12)
+      - name: 📥 Clone mã nguồn OpenMPTCPRouter (develop branch)
         run: |
           mkdir -p ${{ env.BUILD_DIR }}
           cd $(dirname ${{ env.BUILD_DIR }})
