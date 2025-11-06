@@ -1,4 +1,4 @@
-name: Build OpenMPTCPRouter x86_64 (Kernel 6.1 + 6.12 + OpenWrt v24.10)
+name: Build OpenMPTCPRouter x86_64 (Kernel 6.1, OpenWrt 24.10.4)
 
 on:
   push:
@@ -9,18 +9,14 @@ on:
   workflow_dispatch:
 
 env:
-  OPENWRT_BRANCH: openwrt-24.10
-  DIST: openmptcprouter
-  TARGET: x86_64
+  KERNEL_VERSION: "6.1"
+  OPENWRT_BRANCH: "openwrt-24.10"
+  DIST: "openmptcprouter"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 240
-
-    strategy:
-      matrix:
-        kernel: [6.1, 6.12]
 
     steps:
     - name: Checkout OpenMPTCPRouter
@@ -28,63 +24,58 @@ jobs:
       with:
         submodules: recursive
         token: ${{ secrets.GITHUB_TOKEN }}
-        ref: develop
 
-    - name: Setup Build Environment
+    - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          libncurses5-dev \
-          libssl-dev \
-          bc \
-          flex \
-          bison \
-          libelf-dev \
-          git \
-          wget \
-          curl \
-          unzip \
-          rsync \
-          python3 \
-          python3-pip \
-          zlib1g-dev \
-          gawk \
-          gettext \
-          sed \
-          bash \
-          findutils \
-          coreutils \
-          file \
-          gcc-10 \
-          g++-10
+          build-essential libncurses5-dev libssl-dev bc flex bison \
+          libelf-dev git wget curl unzip rsync python3 python3-pip \
+          zlib1g-dev gawk gettext sed bash findutils coreutils file \
+          gcc-10 g++-10
 
-    - name: Clone OpenWrt Source
+    - name: Prepare OpenWrt 24.10.4 source
       run: |
-        mkdir -p openwrt
-        git clone --branch $OPENWRT_BRANCH https://github.com/openwrt/openwrt.git openwrt/source
-        cd openwrt/source
+        mkdir -p x86_64/6.1/source
+        cd x86_64/6.1/source
+
+        # Clone main OpenWrt branch
+        git clone --depth 1 --branch ${OPENWRT_BRANCH} https://github.com/openwrt/openwrt.git .
+
+        # Clone feeds packages
+        git clone --depth 1 --branch ${OPENWRT_BRANCH} https://github.com/openwrt/packages.git feeds/packages
+        git clone --depth 1 --branch ${OPENWRT_BRANCH} https://github.com/openwrt/luci.git feeds/luci
+        git clone --depth 1 --branch ${OPENWRT_BRANCH} https://github.com/openwrt/routing.git feeds/routing
+        git clone --depth 1 --branch ${OPENWRT_BRANCH} https://github.com/openwrt/telephony.git feeds/telephony
+
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Copy patches and kernel support
+    - name: Copy custom patches
       run: |
-        mkdir -p x86_64/${{ matrix.kernel }}/source
-        cp -rf common/* x86_64/${{ matrix.kernel }}/source/
-        cp -rf ${{ matrix.kernel }}/* x86_64/${{ matrix.kernel }}/source/ || true
+        if [ -d "../../../common" ]; then
+          cp -rf ../../../common/* .
+        fi
+        if [ -d "../../../6.1" ]; then
+          cp -rf ../../../6.1/* .
+        fi
+
+    - name: Set environment variables
+      run: |
+        echo "OMR_KERNEL=${KERNEL_VERSION}" >> $GITHUB_ENV
+        echo "OMR_DIST=${DIST}" >> $GITHUB_ENV
+        echo "OMR_OPENWRT=${OPENWRT_BRANCH}" >> $GITHUB_ENV
+        echo "OMR_ALL_PACKAGES=yes" >> $GITHUB_ENV
+        echo "OMR_IMG=yes" >> $GITHUB_ENV
 
     - name: Make build.sh executable
       run: chmod +x build.sh
 
     - name: Build OpenMPTCPRouter
       run: |
-        ./build.sh \
-          --kernel ${{ matrix.kernel }} \
-          --target ${{ env.TARGET }} \
-          --dist ${{ env.DIST }}
+        ./build.sh --kernel $OMR_KERNEL --target x86_64 --dist $OMR_DIST
       env:
-        OMR_KERNEL: ${{ matrix.kernel }}
-        OMR_TARGET: ${{ env.TARGET }}
+        OMR_KERNEL: ${{ env.KERNEL_VERSION }}
         OMR_DIST: ${{ env.DIST }}
         OMR_OPENWRT: ${{ env.OPENWRT_BRANCH }}
         OMR_ALL_PACKAGES: "yes"
@@ -93,13 +84,12 @@ jobs:
         OMR_LOG: "yes"
         FORCE_UNSAFE_CONFIGURE: 1
         DEBIAN_FRONTEND: noninteractive
-      timeout-minutes: 160
+      timeout-minutes: 180
 
-    - name: List all firmware files
+    - name: List firmware files
       run: |
-        echo "=== Firmware files for ${{ matrix.kernel }} ==="
+        echo "=== Firmware files ==="
         find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) | sort
-        find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) -exec ls -lh {} \;
 
     - name: Generate SHA256 checksums
       run: |
@@ -107,50 +97,31 @@ jobs:
         sha256sum * > sha256sums.txt
         cat sha256sums.txt
 
-    - name: Upload build artifacts
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openmptcprouter-${{ matrix.kernel }}-${{ env.TARGET }}
+        name: openmptcprouter-${{ env.KERNEL_VERSION }}-x86_64
         path: |
           bin/targets/x86/64/*.img*
           bin/targets/x86/64/*.bin
           bin/targets/x86/64/*.tar.gz
           bin/targets/x86/64/sha256sums.txt
         retention-days: 30
-        compression-level: 0
-
-    - name: Prepare release assets
-      if: startsWith(github.ref, 'refs/tags/')
-      run: |
-        mkdir -p release_assets/${{ matrix.kernel }}
-        cp -r bin/targets/x86/64/*.img* release_assets/${{ matrix.kernel }}/ || true
-        cp -r bin/targets/x86/64/*.bin release_assets/${{ matrix.kernel }}/ || true
-        cp -r bin/targets/x86/64/*.tar.gz release_assets/${{ matrix.kernel }}/ || true
-        cp bin/targets/x86/64/sha256sums.txt release_assets/${{ matrix.kernel }}/ || true
-        ls -la release_assets/${{ matrix.kernel }}/
 
   release:
     needs: build
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/')
-
     steps:
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-    - name: Display artifact structure
-      run: |
-        find artifacts -type f -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" | sort
-        find artifacts -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" -o -name "sha256sums.txt" \) | wc -l
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: artifacts/openmptcprouter-*-x86_64/*
-        generate_release_notes: true
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/openmptcprouter-6.1-x86_64/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
