@@ -1,5 +1,10 @@
-name: openmptcprouter-x86_64-6.1
-on: [push]
+name: openmptcprouter-x86_64-6.1-24.10.4
+on:
+  push:
+    branches:
+      - develop
+      - master
+  workflow_dispatch:
 
 env:
   REPO_URL: 'https://github.com/ysurac/openmptcprouter'
@@ -8,8 +13,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     continue-on-error: true
+
     steps:
-    - name: Set branch info
+    # ===============================
+    # Step 1: Lấy branch/tag name
+    # ===============================
+    - name: Branch name
       id: branch_name
       run: |
         echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
@@ -17,15 +26,17 @@ jobs:
         echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_OUTPUT
 
-    - name: Install dependencies
+    # ===============================
+    # Step 2: Cài dependencies
+    # ===============================
+    - name: Prepare
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git \
-          libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
-          subversion flex uglifyjs gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
-          libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint \
-          device-tree-compiler python3-pyelftools llvm clang rsync openssh-client
+        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler python3-pyelftools llvm clang
 
+    # ===============================
+    # Step 3: Free disk space
+    # ===============================
     - name: Free disk space
       run: |
         df -h
@@ -33,65 +44,104 @@ jobs:
         sudo rm -f /swapfile || true
         sudo apt-get autoremove -y || true
         sudo apt-get autoclean -y || true
-        sudo rm -rf /usr/local/share/boost $AGENT_TOOLSDIRECTORY /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+        sudo rm -rf "/usr/local/share/boost" || true
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+        sudo rm -rf /usr/share/dotnet || true
+        sudo rm -rf /usr/local/lib/android || true
+        sudo rm -rf /opt/ghc || true
         sudo docker rmi $(docker images -qf "dangling=true") || true
         df -h
 
-    - name: Clone OpenMPTCPRouter
+    # ===============================
+    # Step 4: Clone repository
+    # ===============================
+    - name: Clone source code
       run: |
         git clone $REPO_URL omr
         cd omr
-        git checkout develop
+        git fetch --all
+        if [ "${{ steps.branch_name.outputs.SOURCE_BRANCH }}" == "develop" ]; then
+          git checkout develop
+        else
+          git checkout master
+        fi
         git pull
-      working-directory: ${{ github.workspace }}
 
-    - name: Prepare toolchain
-      working-directory: omr
-      run: |
-        OMR_KERNEL="6.1" OMR_FEED_SRC="develop" sh build.sh prepare {tools,toolchain}/install -j$(nproc)
-
-    - name: Remove problematic dnsmasq patch
+    # ===============================
+    # Step 5: Remove incompatible dnsmasq patch
+    # ===============================
+    - name: Remove incompatible dnsmasq patch
       working-directory: omr/x86_64/6.1/source
       run: |
         PATCH_DIR="package/network/services/dnsmasq/patches"
-        if [ -d "$PATCH_DIR" ]; then
-          if [ -f "$PATCH_DIR/999-remove-nftset-logs.patch" ]; then
-            mv "$PATCH_DIR/999-remove-nftset-logs.patch" "$PATCH_DIR/999-remove-nftset-logs.patch.bak"
-            echo "Patch moved to .bak"
-          fi
+        PATCH_FILE="$PATCH_DIR/999-remove-nftset-logs.patch"
+        if [ -f "$PATCH_FILE" ]; then
+          rm -f "$PATCH_FILE"
+          echo "Removed incompatible patch: $PATCH_FILE"
         else
-          echo "Patch directory not found, skipping..."
+          echo "Patch not found, skipping..."
         fi
 
+    # ===============================
+    # Step 6: Build toolchain
+    # ===============================
+    - name: Build toolchain
+      working-directory: omr
+      env:
+        OMR_FEED_URL: https://github.com/ysurac/openmptcprouter-feeds
+        OMR_TARGET: x86_64
+        OMR_KERNEL: 6.1
+      run: |
+        OMR_KERNEL="${OMR_KERNEL}" OMR_FEED_SRC="${{ steps.branch_name.outputs.SOURCE_NAME }}" sh build.sh prepare {tools,toolchain}/install -j$(nproc)
+
+    # ===============================
+    # Step 7: Build packages
+    # ===============================
     - name: Build packages
-      working-directory: omr/x86_64/6.1/source
+      working-directory: omr/x86_64/6.1
       run: |
-        make IGNORE_ERRORS=m package/{compile,install,index} -j$(nproc) || make IGNORE_ERRORS=m package/{compile,install,index} -j1 V=s
+        make IGNORE_ERRORS=m -C source package/{compile,install,index} -j$(nproc)
 
+    # ===============================
+    # Step 8: Build firmware/image
+    # ===============================
     - name: Build image
-      working-directory: omr/x86_64/6.1/source
+      working-directory: omr/x86_64/6.1
       run: |
-        make IGNORE_ERRORS=m target/install -j$(nproc) || make IGNORE_ERRORS=m target/install -j1 V=s
+        make IGNORE_ERRORS=m -C source target/install -j$(nproc)
 
+    # ===============================
+    # Step 9: Upload artifacts locally
+    # ===============================
     - name: Move binaries for rsync
+      working-directory: omr/x86_64/6.1
       run: |
-        mv omr/x86_64/6.1/source/bin ${{ github.workspace }}/
-    
-    - name: Deploy - Create directory via SSH
-      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
+        mv source/bin ../../bin
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: x86_64
+        path: bin
+        overwrite: true
+
+    # ===============================
+    # Step 10: Deploy via SSH/rsync
+    # ===============================
+    - name: Create deploy directory via SSH
       uses: ysurac/ssh-action@master
       env:
-        SOURCE_BRANCH: ${{ steps.branch_name.outputs.SOURCE_BRANCH }}
+        TARGET_DIR: ${{ steps.branch_name.outputs.SOURCE_BRANCH }} # or use SOURCE_TAG if tag
       with:
+        command: |
+          mkdir -p deploy/${TARGET_DIR}/6.1/x86_64
         host: ${{ secrets.OMR_DEPLOY_HOST }}
         user: deploy
         port: ${{ secrets.OMR_DEPLOY_PORT }}
         key: ${{ secrets.PRIVATE_KEY }}
-        command: |
-          mkdir -p deploy/${{ env.SOURCE_BRANCH }}/6.1/x86_64
+        args: -tt
 
-    - name: Deploy - Upload via rsync
-      if: steps.branch_name.outputs.SOURCE_BRANCH != ''
+    - name: Upload via rsync
       uses: ysurac/action-rsync@master
       env:
         ARGS: -av --delete-after
