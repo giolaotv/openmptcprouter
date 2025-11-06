@@ -13,13 +13,13 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: 🧰 Checkout this repo
+    - name: 🧰 Checkout (your workflow)
       uses: actions/checkout@v4
 
     - name: 🕓 Set timezone
       run: sudo timedatectl set-timezone "$TZ"
 
-    - name: 📦 Prepare environment
+    - name: 📦 Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential ccache ecj fastjar g++ gawk gettext git \
@@ -27,28 +27,27 @@ jobs:
           python3-setuptools python3-pip qemu-utils rsync subversion swig time unzip \
           wget zlib1g-dev
 
-    - name: 🧱 Clone OpenMPTCProuter full source
+    - name: 🧱 Clone OpenMPTCProuter official source
       run: |
         git clone --depth=1 $REPO_URL -b $REPO_BRANCH
-        mv openmptcprouter openmptcp
-        cd openmptcp
+        cd openmptcprouter
         git submodule update --init --recursive
         ls -la
 
-    - name: ⚙️ Prepare OpenMPTCProuter build system
-      working-directory: ./openmptcp
+    - name: ⚙️ Initialize OMR build system
+      working-directory: ./openmptcprouter
       run: |
         ./build init -t x86_64
         ./build update
         ./build menuconfig noninteractive
 
     - name: 🧮 Build firmware
-      working-directory: ./openmptcp
+      working-directory: ./openmptcprouter
       run: |
         ./build build -j$(nproc)
 
-    - name: 📁 Upload firmware artifact
+    - name: 📁 Upload firmware
       uses: actions/upload-artifact@v4
       with:
         name: openmptcprouter-x86_64
-        path: openmptcp/build/output/
+        path: openmptcprouter/build/output/
