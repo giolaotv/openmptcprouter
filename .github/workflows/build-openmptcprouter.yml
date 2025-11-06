@@ -1,63 +1,184 @@
-name: Build OpenMPTCProuter x86_64 Kernel 6.6
+name: Build OpenMPTCPRouter x86_64
 
 on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+      - develop
   workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Kernel version'
+        required: true
+        default: '6.12'
+        type: choice
+        options:
+        - '6.12'
+        - '6.11'
+        - '6.10'
+        - '6.6'
+        - '6.1'
+      openwrt_branch:
+        description: 'OpenWrt branch'
+        required: true
+        default: 'openwrt-24.10'
+        type: string
+      dist:
+        description: 'Distribution'
+        required: true
+        default: 'openmptcprouter'
+        type: string
 
 env:
-  REPO_URL: https://github.com/Ysurac/openmptcprouter
-  REPO_BRANCH: develop
-  TARGET: x86_64
-  KERNEL_VERSION: 6.6
-  TZ: Asia/Ho_Chi_Minh
+  KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12' }}
+  OPENWRT_BRANCH: ${{ github.event.inputs.openwrt_branch || 'openwrt-24.10' }}
+  DIST: ${{ github.event.inputs.dist || 'openmptcprouter' }}
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    
+    strategy:
+      matrix:
+        target: [x86_64]
+        include:
+          - target: x86_64
+            config: config-x86_64
 
     steps:
-    - name: 🧰 Checkout repository
+    - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: 🕓 Set timezone
-      run: sudo timedatectl set-timezone "$TZ"
-
-    - name: 📦 Install dependencies
+    - name: Setup build environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential ccache ecj fastjar g++ gawk gettext git \
-          java-propose-classpath libncurses5-dev libssl-dev python3 python3-distutils \
-          python3-setuptools python3-pip qemu-utils rsync subversion swig time unzip \
-          wget zlib1g-dev
+        sudo apt-get install -y \
+          build-essential \
+          libncurses5-dev \
+          libssl-dev \
+          bc \
+          flex \
+          bison \
+          libelf-dev \
+          git \
+          wget \
+          curl \
+          unzip \
+          rsync \
+          python3 \
+          python3-pip \
+          zlib1g-dev \
+          gawk \
+          gettext \
+          sed \
+          bash \
+          findutils \
+          coreutils \
+          file \
+          gcc-10 \
+          g++-10
 
-    - name: 🧱 Clone OpenMPTCProuter (develop branch)
+    - name: Setup build configuration
       run: |
-        git clone --depth=1 $REPO_URL -b $REPO_BRANCH
-        cd openmptcprouter
-        git submodule update --init --recursive
+        echo "OMR_KERNEL=${{ env.KERNEL_VERSION }}" >> $GITHUB_ENV
+        echo "OMR_TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+        echo "OMR_DIST=${{ env.DIST }}" >> $GITHUB_ENV
+        echo "OMR_OPENWRT=${{ env.OPENWRT_BRANCH }}" >> $GITHUB_ENV
+        echo "OMR_ALL_PACKAGES=yes" >> $GITHUB_ENV
+        echo "OMR_IMG=yes" >> $GITHUB_ENV
 
-    - name: 🧩 Patch build.sh to support kernel 6.6
-      working-directory: ./openmptcprouter
+    - name: Make build.sh executable
+      run: chmod +x build.sh
+
+    - name: Build OpenMPTCPRouter
       run: |
-        # Cho phép build.sh nhận kernel 6.6
-        sed -i 's/KERNEL_VERSIONS="\(.*\)"/KERNEL_VERSIONS="\1 6.6"/' build.sh
+        ./build.sh \
+          --kernel ${{ env.KERNEL_VERSION }} \
+          --target ${{ matrix.target }} \
+          --dist ${{ env.DIST }}
+      env:
+        OMR_KERNEL: ${{ env.KERNEL_VERSION }}
+        OMR_TARGET: ${{ matrix.target }}
+        OMR_DIST: ${{ env.DIST }}
+        OMR_OPENWRT: ${{ env.OPENWRT_BRANCH }}
+        OMR_ALL_PACKAGES: "yes"
+        OMR_IMG: "yes"
+        OMR_KEEPBIN: "no"
+        OMR_LOG: "yes"
+        FORCE_UNSAFE_CONFIGURE: 1
+        DEBIAN_FRONTEND: noninteractive
+      timeout-minutes: 160
 
-    - name: ⚙️ Initialize OMR build system
-      working-directory: ./openmptcprouter
+    - name: List all firmware files
       run: |
-        chmod +x build.sh
-        ./build.sh clean
-        ./build.sh init -t $TARGET -k $KERNEL_VERSION || true
-        ./build.sh update
-        ./build.sh prereq
-        ./build.sh menuconfig noninteractive || true
+        echo "=== Firmware files for ${{ matrix.target }} ==="
+        find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) | sort
+        echo ""
+        echo "=== File sizes ==="
+        find bin/targets -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" \) -exec ls -lh {} \;
 
-    - name: 🧮 Build firmware
-      working-directory: ./openmptcprouter
+    - name: Generate SHA256 checksums
       run: |
-        ./build.sh build -j$(nproc)
+        cd bin/targets/x86/64/
+        sha256sum * > sha256sums.txt
+        echo "=== SHA256 Checksums ==="
+        cat sha256sums.txt
 
-    - name: 📁 Upload firmware artifacts
+    - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openmptcprouter-x86_64-6.6
-        path: openmptcprouter/build/output/
+        name: openmptcprouter-${{ env.KERNEL_VERSION }}-${{ matrix.target }}
+        path: |
+          bin/targets/x86/64/*.img*
+          bin/targets/x86/64/*.bin
+          bin/targets/x86/64/*.tar.gz
+          bin/targets/x86/64/sha256sums.txt
+        retention-days: 30
+        compression-level: 0
+
+    - name: Prepare release assets
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        mkdir -p release_assets
+        cp -r bin/targets/x86/64/*.img* release_assets/ || true
+        cp -r bin/targets/x86/64/*.bin release_assets/ || true
+        cp -r bin/targets/x86/64/*.tar.gz release_assets/ || true
+        cp bin/targets/x86/64/sha256sums.txt release_assets/ || true
+        
+        echo "=== Release assets prepared ==="
+        ls -la release_assets/
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display artifact structure
+      run: |
+        echo "=== Artifact structure ==="
+        find artifacts -type f -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" | sort
+        echo "=== Total files ==="
+        find artifacts -type f \( -name "*.img*" -o -name "*.bin" -o -name "*.tar.gz" -o -name "sha256sums.txt" \) | wc -l
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/openmptcprouter-${{ env.KERNEL_VERSION }}-x86_64/*
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
