@@ -30,8 +30,11 @@ jobs:
           python3-setuptools python3-pip qemu-utils rsync subversion swig time unzip \
           wget zlib1g-dev
 
-    - name: 🧱 Clone OpenMPTCProuter source
-      run: git clone $REPO_URL -b $REPO_BRANCH openmptcprouter
+    - name: 🧱 Clone OpenMPTCProuter full source
+      run: |
+        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openmptcprouter
+        cd openmptcprouter
+        git submodule update --init --recursive
 
     - name: ⚙️ Copy custom config & scripts
       run: |
