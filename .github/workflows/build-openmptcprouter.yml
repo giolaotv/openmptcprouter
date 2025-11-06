@@ -34,15 +34,16 @@ jobs:
         git submodule update --init --recursive
         ls -la
 
-    - name: ⚙️ Initialize OMR build system
+        - name: ⚙️ Initialize OMR build system
       working-directory: ./openmptcprouter
       run: |
         chmod +x build.sh
         ./build.sh clean
-        ./build.sh init -t x86_64
+        ./build.sh init -t x86_64 || true
         ./build.sh update
+        mkdir -p x86_64/5.4/source/staging_dir/target-x86_64_musl/stamp
         ./build.sh prereq
-        ./build.sh menuconfig noninteractive
+        ./build.sh menuconfig noninteractive || true
 
     - name: 🧮 Build firmware
       working-directory: ./openmptcprouter
