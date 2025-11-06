@@ -16,10 +16,10 @@ jobs:
     continue-on-error: false
 
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Set branch and tag info
+    - name: Set branch/tag info
       id: branch_name
       run: |
         echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
@@ -44,14 +44,14 @@ jobs:
         sudo apt-get autoclean -y || true
         df -h
 
-    - name: Clone OpenMPTCProuter repo
+    - name: Clone OpenMPTCProuter
       run: |
         git clone $REPO_URL omr
         cd omr
         git checkout develop
         git pull
 
-    - name: Prepare build environment
+    - name: Build toolchain
       working-directory: omr
       run: |
         OMR_TARGET=x86_64
@@ -59,15 +59,15 @@ jobs:
         OMR_FEED_SRC=${{ steps.branch_name.outputs.SOURCE_NAME }}
         sh build.sh prepare {tools,toolchain}/install -j$(nproc)
 
-    - name: Remove incompatible dnsmasq patch
+    - name: Remove problematic dnsmasq patch
       working-directory: omr/x86_64/6.1/source
       run: |
-        PATCH_FILE="package/network/services/dnsmasq/patches/999-remove-nftset-logs.patch"
-        if [ -f "$PATCH_FILE" ]; then
-          rm -f "$PATCH_FILE"
-          echo "Removed incompatible patch: $PATCH_FILE"
+        PATCH_DIR="package/network/services/dnsmasq/patches"
+        if [ -d "$PATCH_DIR" ]; then
+          echo "Removing patch 999-remove-nftset-logs.patch to avoid build failure..."
+          rm -f $PATCH_DIR/999-remove-nftset-logs.patch
         else
-          echo "Patch not found, skipping..."
+          echo "Patch directory not found, skipping..."
         fi
 
     - name: Build packages
