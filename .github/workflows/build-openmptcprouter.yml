@@ -1,11 +1,11 @@
-name: 🧩 Build OpenMPTCProuter (24.10.x) x86_64
+name: 🧩 Build OpenMPTCProuter (main) x86_64
 
 on:
   workflow_dispatch:
 
 env:
   REPO_URL: https://github.com/Ysurac/openmptcprouter
-  REPO_BRANCH: 24.10.x
+  REPO_BRANCH: main
   TZ: Asia/Ho_Chi_Minh
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
           python3-setuptools python3-pip qemu-utils rsync subversion swig time unzip \
           wget zlib1g-dev file
 
-    - name: 🧱 Clone OpenMPTCProuter (24.10.x branch)
+    - name: 🧱 Clone OpenMPTCProuter (main branch)
       run: |
         git clone --depth=1 $REPO_URL -b $REPO_BRANCH
         cd openmptcprouter
@@ -41,7 +41,7 @@ jobs:
         ./build.sh clean
         ./build.sh init -t x86_64 || true
 
-        # 🩹 Fix missing dependencies if any
+        # 🩹 Fix feed lỗi (nếu có)
         sed -i '/wmt/d' feeds.conf.default || true
         sed -i '/policycoreutils/d' feeds.conf.default || true
 
@@ -58,5 +58,5 @@ jobs:
     - name: 📁 Upload firmware artifact
       uses: actions/upload-artifact@v4
       with:
-        name: openmptcprouter-x86_64-24.10
+        name: openmptcprouter-x86_64-main
         path: openmptcprouter/build/output/
