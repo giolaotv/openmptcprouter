@@ -3,11 +3,12 @@ name: openmptcprouter-x86_64
 on:
   push:
     branches:
+      - master
       - develop
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/ysurac/openmptcprouter
+  REPO_URL: https://github.com/Ysurac/openmptcprouter
   OPENWRT_TAG: v24.10.4
   OMR_KERNEL: 6.1
   OMR_TARGET: x86_64
@@ -23,22 +24,21 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Setup branch/tag info
-      id: branch_name
+    - name: Setup branch info
+      id: branch_info
       run: |
-        echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
-        echo "SOURCE_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-        echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        echo "BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         echo "WORKSPACE=${GITHUB_WORKSPACE}" >> $GITHUB_OUTPUT
 
-    - name: Install dependencies
+    - name: Install build dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git \
-        libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
-        subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp \
-        libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake \
-        libtool autopoint device-tree-compiler python3-pyelftools llvm clang
+          libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
+          subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp \
+          libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake \
+          libtool autopoint device-tree-compiler python3-pyelftools llvm clang rsync
 
     - name: Free disk space
       run: |
@@ -47,15 +47,13 @@ jobs:
         sudo rm -f /swapfile || true
         sudo apt-get autoremove -y
         sudo apt-get autoclean -y
-        sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo docker rmi $(docker images -qf "dangling=true") || true
         df -h
 
-    - name: Clone OpenMPTCPRouter source
+    - name: Clone OpenMPTCPRouter
       run: |
         git clone $REPO_URL omr
         cd omr
-        git checkout develop
+        git checkout master
         git pull
 
     - name: Clone OpenWrt v24.10.4
@@ -66,23 +64,19 @@ jobs:
         git fetch --tags
         git checkout tags/${OPENWRT_TAG} -b build
 
-    - name: Replace dnsmasq with OpenWrt 24.10.4 full
+    - name: Prepare toolchain
+      run: |
+        cd omr
+        OMR_TARGET="${OMR_TARGET}" OMR_FEED_SRC="master" OMR_KERNEL="${OMR_KERNEL}" \
+          ./build.sh prepare {tools,toolchain}/install -j$(nproc) || \
+        OMR_TARGET="${OMR_TARGET}" OMR_FEED_SRC="master" OMR_KERNEL="${OMR_KERNEL}" \
+          ./build.sh prepare {tools,toolchain}/install -j1 V=s
+
+    - name: Replace dnsmasq with OpenWrt 24.10.4
       run: |
         cd omr/${OMR_TARGET}/${OMR_KERNEL}/source/package/network/services
         rm -rf dnsmasq
         cp -r ../../../openwrt/package/network/services/dnsmasq ./dnsmasq
-
-    - name: Build toolchain
-      run: |
-        cd omr
-        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || \
-        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare {tools,toolchain}/install -j1 V=s
-
-    - name: Update feeds
-      run: |
-        cd omr/${OMR_TARGET}/${OMR_KERNEL}/source
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
 
     - name: Build packages
       run: |
@@ -90,13 +84,13 @@ jobs:
         make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j$(nproc) || \
         make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j1 V=s
 
-    - name: Build firmware image
+    - name: Build firmware
       run: |
         cd omr
         make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j$(nproc) || \
         make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j1 V=s
 
-    - name: Move binaries for rsync
+    - name: Move firmware binaries
       run: |
         cd omr
         mv ${OMR_TARGET}/${OMR_KERNEL}/source/bin ${GITHUB_WORKSPACE}/
@@ -108,9 +102,8 @@ jobs:
         path: ./bin
         overwrite: true
 
-    # --- Deploy section ---
-    - if: steps.branch_name.outputs.SOURCE_BRANCH == ''
-      name: Deploy - Create directory for tag
+    # --- Deploy via SSH/rsync ---
+    - name: Create remote directory
       uses: ysurac/ssh-action@master
       with:
         host: ${{ secrets.OMR_DEPLOY_HOST }}
@@ -119,38 +112,17 @@ jobs:
         key: ${{ secrets.PRIVATE_KEY }}
         args: -tt
         command: |
-          mkdir -p deploy/release/${{ steps.branch_name.outputs.SOURCE_TAG }}/${OMR_TARGET}
+          if [ -n "${{ steps.branch_info.outputs.TAG }}" ]; then
+            mkdir -p deploy/release/${{ steps.branch_info.outputs.TAG }}/${OMR_TARGET}
+          else
+            mkdir -p deploy/${{ steps.branch_info.outputs.BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
+          fi
 
-    - if: steps.branch_name.outputs.SOURCE_BRANCH != ''
-      name: Deploy - Create directory for branch
-      uses: ysurac/ssh-action@master
-      with:
-        host: ${{ secrets.OMR_DEPLOY_HOST }}
-        user: deploy
-        port: ${{ secrets.OMR_DEPLOY_PORT }}
-        key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-        command: |
-          mkdir -p deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
-
-    - if: steps.branch_name.outputs.SOURCE_BRANCH == ''
-      name: Deploy - Upload via rsync (tag)
+    - name: Upload firmware via rsync
       uses: ysurac/action-rsync@master
       with:
         ARGS: -av --delete-after
-        TARGET: deploy/release/${{ steps.branch_name.outputs.SOURCE_TAG }}/${OMR_TARGET}
-        SOURCE: ./bin/
-        KEY: ${{ secrets.PRIVATE_KEY }}
-        USER: deploy
-        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
-        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
-
-    - if: steps.branch_name.outputs.SOURCE_BRANCH != ''
-      name: Deploy - Upload via rsync (branch)
-      uses: ysurac/action-rsync@master
-      with:
-        ARGS: -av --delete-after
-        TARGET: deploy/${{ steps.branch_name.outputs.SOURCE_BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
+        TARGET: ${{ steps.branch_info.outputs.TAG && "deploy/release/${{ steps.branch_info.outputs.TAG }}/${OMR_TARGET}" || "deploy/${{ steps.branch_info.outputs.BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}" }}
         SOURCE: ./bin/
         KEY: ${{ secrets.PRIVATE_KEY }}
         USER: deploy
