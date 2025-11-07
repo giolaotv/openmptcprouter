@@ -18,17 +18,10 @@ jobs:
     continue-on-error: true
 
     steps:
-    - name: Checkout OpenMPTCPRouter
+    - name: Checkout repo
       uses: actions/checkout@v3
       with:
         fetch-depth: 0
-
-    - name: Setup branch info
-      id: branch_info
-      run: |
-        echo "SOURCE_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
-        echo "SOURCE_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-        echo "SOURCE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
     - name: Install dependencies
       run: |
@@ -48,7 +41,7 @@ jobs:
         sudo apt-get autoclean -y
         df -h
 
-    - name: Clone OpenMPTCPRouter source
+    - name: Clone OpenMPTCPRouter
       run: |
         git clone $REPO_URL omr
         cd omr
@@ -63,18 +56,25 @@ jobs:
         git fetch --tags
         git checkout tags/${OPENWRT_TAG} -b build
 
-    - name: Build toolchain (multi-thread fallback single-thread)
+    - name: Prepare build environment
       run: |
         cd omr
-        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare {tools,toolchain}/install -j$(nproc) || \
-        OMR_KERNEL="${OMR_KERNEL}" sh build.sh prepare {tools,toolchain}/install -j1 V=s
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh prepare
 
-    - name: Replace dnsmasq with OpenWrt version
+    - name: Build toolchain (fallback single-thread)
       run: |
-        SRC_DIR="${GITHUB_WORKSPACE}/omr/${OMR_TARGET}/${OMR_KERNEL}/source/package/network/services"
+        cd omr
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh tools/install -j$(nproc) || \
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh tools/install -j1 V=s
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh toolchain/install -j$(nproc) || \
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh toolchain/install -j1 V=s
+
+    - name: Replace dnsmasq with OpenWrt v24.10.4 version
+      run: |
+        SRC_DIR="omr/${OMR_TARGET}/${OMR_KERNEL}/source/package/network/services"
         mkdir -p $SRC_DIR
-        rm -rf $SRC_DIR/dnsmasq-full
-        cp -r ${GITHUB_WORKSPACE}/omr/openwrt/package/network/services/dnsmasq $SRC_DIR/dnsmasq-full
+        rm -rf $SRC_DIR/dnsmasq
+        cp -r omr/openwrt/package/network/services/dnsmasq $SRC_DIR/
 
     - name: Update feeds
       run: |
@@ -85,73 +85,18 @@ jobs:
     - name: Build packages
       run: |
         cd omr
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j$(nproc) || \
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source package/{compile,install,index} -j1 V=s
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh package/compile -j$(nproc) || \
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh package/compile -j1 V=s
 
-    - name: Build firmware image
+    - name: Build firmware
       run: |
         cd omr
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j$(nproc) || \
-        make IGNORE_ERRORS=m -C ${OMR_TARGET}/${OMR_KERNEL}/source target/install -j1 V=s
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh target/install -j$(nproc) || \
+        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh target/install -j1 V=s
 
-    - name: Move binaries for artifact
-      run: |
-        cd omr
-        mv ${OMR_TARGET}/${OMR_KERNEL}/source/bin ${GITHUB_WORKSPACE}/
-
-    - name: Upload artifacts
-      if: always()
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: ${OMR_TARGET}-firmware
-        path: ./bin
+        name: firmware-${{ env.OMR_TARGET }}-${{ env.OMR_KERNEL }}
+        path: omr/${{ env.OMR_TARGET }}/${{ env.OMR_KERNEL }}/source/bin
         overwrite: true
-
-    # --- Deploy via SSH/rsync ---
-    - if: steps.branch_info.outputs.SOURCE_BRANCH == ''
-      name: Deploy - Create directory for tag
-      uses: ysurac/ssh-action@master
-      with:
-        host: ${{ secrets.OMR_DEPLOY_HOST }}
-        user: deploy
-        port: ${{ secrets.OMR_DEPLOY_PORT }}
-        key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-        command: |
-          mkdir -p deploy/release/${{ steps.branch_info.outputs.SOURCE_TAG }}/${OMR_TARGET}
-
-    - if: steps.branch_info.outputs.SOURCE_BRANCH != ''
-      name: Deploy - Create directory for branch
-      uses: ysurac/ssh-action@master
-      with:
-        host: ${{ secrets.OMR_DEPLOY_HOST }}
-        user: deploy
-        port: ${{ secrets.OMR_DEPLOY_PORT }}
-        key: ${{ secrets.PRIVATE_KEY }}
-        args: -tt
-        command: |
-          mkdir -p deploy/${{ steps.branch_info.outputs.SOURCE_BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
-
-    - if: steps.branch_info.outputs.SOURCE_BRANCH == ''
-      name: Deploy - Upload via rsync (tag)
-      uses: ysurac/action-rsync@master
-      with:
-        ARGS: -av --delete-after
-        TARGET: deploy/release/${{ steps.branch_info.outputs.SOURCE_TAG }}/${OMR_TARGET}
-        SOURCE: ./bin/
-        KEY: ${{ secrets.PRIVATE_KEY }}
-        USER: deploy
-        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
-        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
-
-    - if: steps.branch_info.outputs.SOURCE_BRANCH != ''
-      name: Deploy - Upload via rsync (branch)
-      uses: ysurac/action-rsync@master
-      with:
-        ARGS: -av --delete-after
-        TARGET: deploy/${{ steps.branch_info.outputs.SOURCE_BRANCH }}/${OMR_KERNEL}/${OMR_TARGET}
-        SOURCE: ./bin/
-        KEY: ${{ secrets.PRIVATE_KEY }}
-        USER: deploy
-        HOST: ${{ secrets.OMR_DEPLOY_HOST }}
-        PORT: ${{ secrets.OMR_DEPLOY_PORT }}
