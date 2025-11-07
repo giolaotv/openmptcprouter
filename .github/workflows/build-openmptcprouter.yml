@@ -1,115 +1,132 @@
-name: OpenMPTCPRouter x86_64 Kernel 6.1 + OpenWrt 24.10.4
+name: OpenMPTCPRouter x86_64 Build
 
 on:
   push:
     branches:
       - develop
-      - main
   workflow_dispatch:
 
 env:
   REPO_URL: https://github.com/ysurac/openmptcprouter
-  OPENWRT_VERSION: v24.10.4
   OMR_TARGET: x86_64
   OMR_KERNEL: 6.1
+  OPENWRT_VERSION: v24.10.4
 
 jobs:
-  build-x86_64:
+  build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout workflow
+      uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev \
-            lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
-            libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler \
-            python3-pyelftools llvm clang
+    - name: Set environment variables
+      id: vars
+      run: |
+        echo "WORKSPACE=$GITHUB_WORKSPACE" >> $GITHUB_OUTPUT
 
-      - name: Create cache directories
-        run: |
-          mkdir -p $HOME/.cache/omr/toolchain
-          mkdir -p $HOME/.cache/omr/feeds
-          mkdir -p $HOME/.cache/omr/source
+    - name: Prepare system
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext \
+          git libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
+          subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev \
+          texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool \
+          autopoint device-tree-compiler python3-pyelftools llvm clang
 
-      - name: Cache OpenMPTCPRouter source
-        uses: actions/cache@v3
-        with:
-          path: $HOME/.cache/omr/source
-          key: omr-source-${{ hashFiles('**/feeds.conf.default') }}
+    - name: Free disk space
+      run: |
+        df -h
+        sudo swapoff -a || true
+        sudo rm -f /swapfile || true
+        sudo apt-get autoremove -y || true
+        sudo apt-get autoclean -y || true
+        df -h
 
-      - name: Cache OpenMPTCPRouter feeds
-        uses: actions/cache@v3
-        with:
-          path: $HOME/.cache/omr/feeds
-          key: omr-feeds-${{ hashFiles('omr/x86_64/6.1/source/feeds.conf.default') }}
+    - name: Restore source cache
+      id: source-cache
+      uses: actions/cache@v3
+      with:
+        path: omr
+        key: omr-source-${{ github.sha }}
+        restore-keys: |
+          omr-source-
 
-      - name: Cache toolchain
-        uses: actions/cache@v3
-        with:
-          path: $HOME/.cache/omr/toolchain
-          key: omr-toolchain-${{ env.OMR_KERNEL }}-${{ env.OMR_TARGET }}
-
-      - name: Clone OpenMPTCPRouter source
-        run: |
-          if [ -d "$HOME/.cache/omr/source/omr" ]; then
-            cp -r $HOME/.cache/omr/source/omr ./omr
-            cd omr
-            git reset --hard
-            git clean -fdx
-          else
-            git clone $REPO_URL omr
-            cd omr
-          fi
+    - name: Clone or restore source
+      run: |
+        if [ -d "./omr" ]; then
+          echo "Source restored from cache."
+        else
+          git clone $REPO_URL ./omr
+          cd omr
           git checkout develop
           git pull
-          cp -r ./omr $HOME/.cache/omr/source/  # update cache
+          cd ../
+        fi
 
-      - name: Replace dnsmasq with OpenWrt 24.10.4 version
-        run: |
-          cd omr/x86_64/$OMR_KERNEL/source/package/network/services/
-          rm -rf dnsmasq
-          git clone -b $OPENWRT_VERSION --single-branch https://github.com/openwrt/openwrt.git temp-openwrt
-          mv temp-openwrt/package/network/services/dnsmasq ./dnsmasq
-          rm -rf temp-openwrt
+    - name: Update feeds
+      run: |
+        cd omr/$OMR_TARGET/$OMR_KERNEL/source
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        cd ../../../..
 
-      - name: Update feeds
-        run: |
-          cd omr/x86_64/$OMR_KERNEL/source
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+    - name: Restore toolchain cache
+      id: toolchain-cache
+      uses: actions/cache@v3
+      with:
+        path: omr/$OMR_TARGET/$OMR_KERNEL/source/staging_dir/toolchain-x86_64_gcc-12.2.0_musl
+        key: omr-toolchain-${{ github.sha }}
+        restore-keys: |
+          omr-toolchain-
 
-      - name: Build toolchain (with fallback)
-        run: |
-          cd omr/x86_64/$OMR_KERNEL/source
-          sh ../../../../build.sh prepare tools/toolchain/install -j$(nproc) || sh ../../../../build.sh prepare tools/toolchain/install -j1 V=s
+    - name: Remove incompatible dnsmasq patches
+      run: |
+        PATCH_DIR="omr/$OMR_TARGET/$OMR_KERNEL/source/package/network/services/dnsmasq/patches"
+        if [ -d "$PATCH_DIR" ]; then
+          echo "Removing incompatible dnsmasq patches..."
+          rm -f $PATCH_DIR/999-remove-nftset-logs.patch
+          rm -f $PATCH_DIR/200-ubus_dns.patch
+        fi
 
-      - name: Build packages (multi-threaded with fallback)
-        run: |
-          cd omr/x86_64/$OMR_KERNEL/source
-          make IGNORE_ERRORS=m package/{compile,install,index} -j$(nproc) || make IGNORE_ERRORS=m package/{compile,install,index} -j1 V=s
+    - name: Build toolchain
+      run: |
+        cd omr
+        sh build.sh prepare {tools,toolchain}/install -j$(nproc) || sh build.sh prepare {tools,toolchain}/install -j1 V=s
+        cd ..
 
-      - name: Build image
-        run: |
-          cd omr/x86_64/$OMR_KERNEL/source
-          make IGNORE_ERRORS=m target/install -j$(nproc) || make IGNORE_ERRORS=m target/install -j1 V=s
+    - name: Build packages
+      run: |
+        cd omr
+        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j$(nproc) || \
+        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source package/{compile,install,index} -j1 V=s
+        cd ..
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: x86_64-bin
-          path: omr/x86_64/$OMR_KERNEL/source/bin
-          overwrite: true
+    - name: Build image
+      run: |
+        cd omr
+        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j$(nproc) || \
+        make IGNORE_ERRORS=m -C $OMR_TARGET/$OMR_KERNEL/source target/install -j1 V=s
+        cd ..
 
-      - name: Deploy via SSH + rsync
-        uses: ysurac/ssh-action@master
-        with:
-          host: ${{ secrets.OMR_DEPLOY_HOST }}
-          user: deploy
-          port: ${{ secrets.OMR_DEPLOY_PORT }}
-          key: ${{ secrets.PRIVATE_KEY }}
-          command: |
-            mkdir -p deploy/${OMR_KERNEL}/${OMR_TARGET}
-            rsync -av --delete-after ./omr/x86_64/$OMR_KERNEL/source/bin/ deploy/${OMR_KERNEL}/${OMR_TARGET}/
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: x86_64_build
+        path: omr/$OMR_TARGET/$OMR_KERNEL/source/bin
+        overwrite: true
+
+    - name: Deploy via SSH/rsync
+      if: github.event_name == 'push'
+      uses: ysurac/ssh-action@master
+      with:
+        host: ${{ secrets.OMR_DEPLOY_HOST }}
+        user: deploy
+        port: ${{ secrets.OMR_DEPLOY_PORT }}
+        key: ${{ secrets.PRIVATE_KEY }}
+        command: |
+          mkdir -p deploy/${OMR_KERNEL}/${OMR_TARGET}
+          rsync -av --delete-after ./omr/${OMR_TARGET}/${OMR_KERNEL}/source/bin/ deploy/${OMR_KERNEL}/${OMR_TARGET}/
