@@ -1,102 +1,45 @@
-name: OpenMPTCPRouter-x86_64
+name: Build OpenMPTCProuter x86_64 (Kernel 6.6 - develop)
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - develop
-  workflow_dispatch:
-
-env:
-  REPO_URL: https://github.com/Ysurac/openmptcprouter
-  OPENWRT_TAG: v24.10.4
-  OMR_KERNEL: 6.1
-  OMR_TARGET: x86_64
+      - master
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    continue-on-error: true
+    runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
+      - name: 🧰 Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git \
-        libncurses5-dev libz-dev patch unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 \
-        subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp \
-        libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake \
-        libtool autopoint device-tree-compiler python3-pyelftools llvm clang
+      - name: ⚙️ Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget python3-setuptools python3 python3-pyelftools ccache
 
-    - name: Free disk space
-      run: |
-        df -h
-        sudo swapoff -a || true
-        sudo rm -f /swapfile || true
-        sudo apt-get autoremove -y
-        sudo apt-get autoclean -y
-        df -h
+      - name: 📦 Clone OpenMPTCProuter source
+        run: |
+          git clone https://github.com/Ysurac/openmptcprouter.git
+          cd openmptcprouter
+          echo "✅ Repo cloned"
 
-    - name: Clone OpenMPTCPRouter
-      run: |
-        git clone $REPO_URL omr
-        cd omr
-        git checkout develop
-        git pull
+      - name: 🏗️ Build OpenMPTCProuter (x86_64 / Kernel 6.6 / develop)
+        run: |
+          cd openmptcprouter
+          OMR_TARGET="x86_64" OMR_FEED_SRC="develop" OMR_KERNEL="6.6" ./build.sh
 
-    - name: Clone OpenWrt v24.10.4
-      run: |
-        cd omr
-        git clone https://github.com/openwrt/openwrt.git openwrt
-        cd openwrt
-        git fetch --tags
-        git checkout tags/${OPENWRT_TAG} -b build
+      - name: 📁 Save build output
+        if: success()
+        run: |
+          mkdir -p output
+          find openmptcprouter/x86_64 -type f \( -name "*.img.gz" -o -name "*.tar.gz" -o -name "*.bin" \) -exec cp {} output/ \;
+          echo "✅ Output copied to ./output"
 
-    - name: Prepare build environment
-      run: |
-        cd omr
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh prepare
-
-    - name: Build toolchain (fallback single-thread)
-      run: |
-        cd omr
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh tools/install -j$(nproc) || \
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh tools/install -j1 V=s
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh toolchain/install -j$(nproc) || \
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh toolchain/install -j1 V=s
-
-    - name: Replace dnsmasq with OpenWrt v24.10.4 version
-      run: |
-        SRC_DIR="omr/${OMR_TARGET}/${OMR_KERNEL}/source/package/network/services"
-        mkdir -p $SRC_DIR
-        rm -rf $SRC_DIR/dnsmasq
-        cp -r omr/openwrt/package/network/services/dnsmasq $SRC_DIR/
-
-    - name: Update feeds
-      run: |
-        cd omr
-        ./build.sh feeds update -a
-        ./build.sh feeds install -a
-
-    - name: Build packages
-      run: |
-        cd omr
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh package/compile -j$(nproc) || \
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh package/compile -j1 V=s
-
-    - name: Build firmware
-      run: |
-        cd omr
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh target/install -j$(nproc) || \
-        OMR_TARGET="${OMR_TARGET}" OMR_KERNEL="${OMR_KERNEL}" ./build.sh target/install -j1 V=s
-
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: firmware-${{ env.OMR_TARGET }}-${{ env.OMR_KERNEL }}
-        path: omr/${{ env.OMR_TARGET }}/${{ env.OMR_KERNEL }}/source/bin
-        overwrite: true
+      - name: 📤 Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmptcprouter-x86_64-kernel66
+          path: output/
